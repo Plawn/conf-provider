@@ -4,10 +4,10 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use konf_provider::loader::{JsonLoader, Loader, MultiLoader, MultiWriter, Value, YamlLoader};
+use konf_provider::loader::{JsonLoader, MultiLoader, MultiWriter, Value, YamlLoader};
 use konf_provider::render::resolve_refs;
+use konf_provider::utils::MyError;
 use konf_provider::{Konf, utils};
-use serde::Deserialize;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -40,8 +40,8 @@ fn main() -> std::io::Result<()> {
         .init();
     let folder = "example".parse::<PathBuf>().unwrap();
     let multiloader = MultiLoader::new(vec![Box::new(YamlLoader {})]);
-    let d = Dag::new(folder, multiloader);
-
+    let d = Dag::new(folder, multiloader).expect("failed to read directory");
+    println!("d: {:?}", &d);
     let multiwriter = MultiWriter::new(vec![Box::new(YamlLoader {}), Box::new(JsonLoader {})]);
 
     let state = Arc::from(AppState {
@@ -52,6 +52,7 @@ fn main() -> std::io::Result<()> {
     App::new()
         .with_state(state)
         .at("/live", get(handler_service(async || "OK")))
+        .at("/reload", get(handler_service(reload)))
         .at("/data/:format", get(handler_service(get_data)))
         .enclosed_fn(utils::error_handler)
         .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
@@ -61,19 +62,30 @@ fn main() -> std::io::Result<()> {
         .wait()
 }
 
-
 async fn get_data(
     Params(format): Params<String>,
     StateRef(state): StateRef<'_, AppState>,
-) -> String {
-    let d = state.dag.lock().unwrap().get_rendered("c").unwrap();
-    let m = &state
+) -> Result<String, MyError> {
+    let d = state
+        .dag
+        .lock()
+        .unwrap()
+        .get_rendered("c")
+        .map_err(|_| MyError(anyhow::Error::msg("missing item")))?;
+    state
         .writer
-        .loaders
-        .iter()
-        .find(|e| e.ext() == format.as_str())
-        .unwrap();
-    m.to_str(&d)
+        .write(&format, &d)
+        .ok_or(MyError(anyhow::Error::msg("Failed to get format")))
+}
+
+async fn reload(StateRef(state): StateRef<'_, AppState>) -> Result<String, MyError> {
+    let d = state
+        .dag
+        .lock()
+        .unwrap()
+        .reload()
+        .map_err(|_| MyError(anyhow::Error::msg("failed to reload conf")))?;
+    Ok("OK".to_string())
 }
 
 #[derive(Debug)]
@@ -85,30 +97,38 @@ pub struct Dag {
 }
 
 impl Dag {
-    pub fn new(folder: PathBuf, multiloader: MultiLoader) -> Self {
-        let paths = fs::read_dir(&folder).unwrap();
-        let mut files: HashMap<String, Konf> = HashMap::new();
-        for path in paths {
-            let p1 = path.unwrap().file_name();
-            let p = p1.to_str().unwrap();
-            // bad
-            let content =
-                fs::read_to_string(String::new() + folder.as_os_str().to_str().unwrap() + "/" + p)
-                    .unwrap();
-            let s = p.to_string();
-            let raw = multiloader.load(&s, &content).unwrap();
-            let k = Konf::new(raw);
-
-            let mut pp = s.split(".");
-            files.insert(pp.next().unwrap().to_string(), k);
-        }
-
-        Self {
-            files,
+    pub fn new(folder: PathBuf, multiloader: MultiLoader) -> anyhow::Result<Self> {
+        let mut s = Self {
+            files: HashMap::new(),
             folder,
             multiloader,
             rendering: HashSet::new(),
+        };
+        s.reload()?;
+        Ok(s)
+    }
+
+    fn reload(&mut self) -> anyhow::Result<()> {
+        let paths = fs::read_dir(&self.folder)?;
+        let mut files: HashMap<String, Konf> = HashMap::new();
+        for path in paths {
+            let p1 = path?.file_name();
+            let p = p1
+                .to_str()
+                .ok_or(anyhow::Error::msg("failed to read filename"))?;
+            let mut m_folder = self.folder.clone();
+            m_folder.push(p);
+            let content = fs::read_to_string(m_folder)?;
+            let k = Konf::new(self.multiloader.load(&p, &content)?);
+
+            let path_no_ext = p
+                .split(".")
+                .next()
+                .ok_or(anyhow::Error::msg("invalid path"))?;
+            files.insert(path_no_ext.to_string(), k);
         }
+        self.files = files;
+        Ok(())
     }
 
     pub fn get_rendered(&mut self, file_path: &str) -> anyhow::Result<Value> {

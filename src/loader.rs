@@ -1,6 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize)]
 pub enum Value {
@@ -37,8 +38,9 @@ impl Value {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum LoaderError {
+    #[error("Parse failed")]
     ParseFailed,
 }
 
@@ -72,12 +74,12 @@ impl Loader for YamlLoader {
 }
 
 impl ValueWriter for JsonLoader {
-       fn ext(&self) -> &'static str {
+    fn ext(&self) -> &'static str {
         "json"
     }
     fn to_str(&self, v: &Value) -> String {
         serde_json::to_string(&Value::to_json(v)).unwrap()
-    } 
+    }
 }
 
 impl ValueWriter for YamlLoader {
@@ -212,12 +214,10 @@ impl MultiWriter {
         Self { loaders }
     }
 
-    pub fn write(&self, filename: &str, content: &Value) -> String {
-        let l = self
-            .loaders
+    pub fn write(&self, ext: &str, content: &Value) -> Option<String> {
+        self.loaders
             .iter()
-            .find(|e| filename.split(".").last().unwrap() == e.ext())
-            .expect("missing");
-        return l.to_str(content);
+            .find(|e| ext == e.ext())
+            .map(|l| l.to_str(content))
     }
 }
