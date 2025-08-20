@@ -8,10 +8,10 @@ use konf_provider::render::resolve_refs_from_deps;
 use konf_provider::utils::MyError;
 use konf_provider::{DagFiles, InFlightFuture, Konf, SharedResult, utils};
 use std::collections::HashMap;
+use std::fs;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
-use std::{fmt, fs};
+use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -30,39 +30,22 @@ struct AppState {
 }
 
 fn main() -> std::io::Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!(
-                    "{}=debug,tower_http=debug,axum::rejection=trace",
-                    env!("CARGO_CRATE_NAME")
-                )
-                .into()
-            }),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // tracing_subscriber::registry()
+    //     .with(
+    //         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+    //             format!(
+    //                 "{}=debug,tower_http=debug,axum::rejection=trace",
+    //                 env!("CARGO_CRATE_NAME")
+    //             )
+    //             .into()
+    //         }),
+    //     )
+    //     .with(tracing_subscriber::fmt::layer())
+    //     .init();
     let folder = "example".parse::<PathBuf>().unwrap();
     let multiloader = MultiLoader::new(vec![Box::new(YamlLoader {})]);
     let d = Dag::new(folder, multiloader).expect("failed to read directory");
 
-    struct A {
-        field: String,
-    }
-
-    let m = Arc::from(Mutex::new(A {
-        field: "C'est une string".to_string(),
-    }));
-
-    let l = m.lock();
-    match l {
-        Ok(mut ma_struct) => {
-            ma_struct.field = "J'ai modifié".to_string();
-        },
-        Err(_) => {
-            eprintln!("je n'ai pas réussi a avoir le lock");
-        },
-    }
     let multiwriter = MultiWriter::new(vec![Box::new(YamlLoader {}), Box::new(JsonLoader {})]);
 
     let state = Arc::from(AppState {
@@ -76,7 +59,7 @@ fn main() -> std::io::Result<()> {
         .at("/reload", get(handler_service(reload)))
         .at("/data/:format", get(handler_service(get_data)))
         .enclosed_fn(utils::error_handler)
-        .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
+        // .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
         .serve()
         .bind(format!("0.0.0.0:{}", &4000))?
         .run()
@@ -151,52 +134,23 @@ impl Dag {
         handle.reload()?; // Call reload on the new handle
         Ok(handle)
     }
-    /// This is the refactored, public-facing async function.
     pub async fn get_rendered(&self, file_path: &str) -> anyhow::Result<Value> {
-        // 1. Fast path: Check persistent cache (no locking needed)
-        if let Some(k) = self.inner.files.load().get(file_path) {
-            if let Some(r) = &k.rendered {
-                return Ok(r.clone());
-            }
-        }
+        let files_snapshot = self.inner.files.load();
+        let konf = files_snapshot
+            .get(file_path)
+            .ok_or_else(|| anyhow!("File not found: {}", file_path))?;
 
-        // 2. Slow path: Coalesce work using a helper function.
-        // The helper returns a future that is guaranteed to be Send.
-        let future_to_await = self.render_or_get_in_flight(file_path);
-
-        // 3. Await the result.
-        let shared_result = future_to_await.await;
-
-        // 4. Clean up the in-flight map for this specific request.
-        self.inner.in_flight_renders.remove(file_path);
-
-        // 5. Convert the internal SharedResult back to the public anyhow::Result.
-        shared_result.map_err(|arc_err| anyhow!(arc_err.to_string()))
-    }
-    fn render_or_get_in_flight(&self, file_path: &str) -> InFlightFuture {
-        // First, do a quick check to see if a future is already in flight.
-        if let Some(entry) = self.inner.in_flight_renders.get(file_path) {
-            return entry.value().clone();
-        }
-
-        // If not, we'll create a new future for rendering.
-        let self_clone = self.clone();
-        let path_owned = file_path.to_string();
-
-        let render_future = async move {
-            let result: anyhow::Result<Value> = async {
-                let global_snapshot = self_clone.inner.files.load();
-                let raw_value = global_snapshot
-                    .get(&path_owned)
-                    .ok_or_else(|| anyhow!("File not found: {}", path_owned))?
-                    .raw
-                    .clone();
+        // This `get_or_try_init` takes a Future, and the whole expression is await-able.
+        // This now correctly matches what the compiler expects.
+        let rendered_value = konf
+            .rendered
+            .get_or_try_init(async {
+                // The async block is now valid
+                let raw_value = konf.raw.clone();
                 let imports = get_imports(&raw_value);
 
-                let dep_futures: Vec<_> = imports
-                    .iter()
-                    .map(|key| self_clone.get_rendered(key))
-                    .collect();
+                let dep_futures: Vec<_> =
+                    imports.iter().map(|key| self.get_rendered(key)).collect();
 
                 let dep_results = future::try_join_all(dep_futures).await?;
                 let deps_map: HashMap<String, Value> =
@@ -205,36 +159,77 @@ impl Dag {
                 let mut value_to_render = raw_value;
                 resolve_refs_from_deps(&mut value_to_render, &deps_map);
 
-                self_clone
-                    .commit_single_result(&path_owned, value_to_render.clone())
-                    .await;
-                Ok(value_to_render)
-            }
-            .await;
+                // The future must resolve to a Result<Value, E>
+                Ok::<_, anyhow::Error>(value_to_render)
+            })
+            .await?; // We await the final result here.
 
-            // Convert the final result into the shared format.
-            result.map_err(Arc::new)
-        };
-
-        // This is where we explicitly assert that our future is `Send`.
-        let boxed_future: Pin<Box<dyn futures::Future<Output = SharedResult> + Send + Sync>> =
-            Box::pin(render_future);
-        let shared_future = boxed_future.shared();
-
-        // Now, use the entry API to atomically insert or get the existing future.
-        // This handles the race condition where two threads try to render the same file.
-        match self.inner.in_flight_renders.entry(file_path.to_string()) {
-            Entry::Occupied(entry) => {
-                // Another thread won the race. Use its future.
-                entry.get().clone()
-            }
-            Entry::Vacant(entry) => {
-                // We won the race. Insert our future and return it.
-                entry.insert(shared_future.clone());
-                shared_future
-            }
-        }
+        Ok(rendered_value.clone())
     }
+
+    // fn render_or_get_in_flight(&self, file_path: &str) -> InFlightFuture {
+    //     // First, do a quick check to see if a future is already in flight.
+    //     if let Some(entry) = self.inner.in_flight_renders.get(file_path) {
+    //         return entry.value().clone();
+    //     }
+
+    //     // If not, we'll create a new future for rendering.
+    //     let self_clone = self.clone();
+    //     let path_owned = file_path.to_string();
+
+    //     let render_future = async move {
+    //         let result: anyhow::Result<Value> = async {
+    //             let global_snapshot = self_clone.inner.files.load();
+    //             let raw_value = global_snapshot
+    //                 .get(&path_owned)
+    //                 .ok_or_else(|| anyhow!("File not found: {}", path_owned))?
+    //                 .raw
+    //                 .clone();
+    //             let imports = get_imports(&raw_value);
+
+    //             let dep_futures: Vec<_> = imports
+    //                 .iter()
+    //                 .map(|key| self_clone.get_rendered(key))
+    //                 .collect();
+
+    //             let dep_results = future::try_join_all(dep_futures).await?;
+    //             let deps_map: HashMap<String, Value> =
+    //                 imports.into_iter().zip(dep_results).collect();
+
+    //             let mut value_to_render = raw_value;
+    //             resolve_refs_from_deps(&mut value_to_render, &deps_map);
+
+    //             self_clone
+    //                 .commit_single_result(&path_owned, value_to_render.clone())
+    //                 .await;
+    //             Ok(value_to_render)
+    //         }
+    //         .await;
+
+    //         // Convert the final result into the shared format.
+    //         result.map_err(Arc::new)
+    //     };
+
+    //     // This is where we explicitly assert that our future is `Send`.
+    //     let boxed_future: Pin<Box<dyn futures::Future<Output = SharedResult> + Send + Sync>> =
+    //         Box::pin(render_future);
+    //     let shared_future = boxed_future.shared();
+
+    //     // Now, use the entry API to atomically insert or get the existing future.
+    //     // This handles the race condition where two threads try to render the same file.
+    //     match self.inner.in_flight_renders.entry(file_path.to_string()) {
+    //         Entry::Occupied(entry) => {
+    //             // Another thread won the race. Use its future.
+    //             entry.get().clone()
+    //         }
+    //         Entry::Vacant(entry) => {
+    //             // We won the race. Insert our future and return it.
+    //             entry.insert(shared_future.clone());
+    //             shared_future
+    //         }
+    //     }
+    // }
+
     // reload() now takes &self and updates the ArcSwap
     pub fn reload(&self) -> anyhow::Result<()> {
         let paths = fs::read_dir(&self.inner.folder)?;
@@ -267,30 +262,28 @@ impl Dag {
     }
 
     // New helper to commit just one file's result
-    async fn commit_single_result(&self, key: &str, value: Value) {
-        loop {
-            let guard = self.inner.files.load();
-            let mut new_map = (**guard).clone();
-            if let Some(k) = new_map.get_mut(key) {
-                k.rendered = Some(value.clone());
-                let new_arc = Arc::new(new_map);
-                if Arc::ptr_eq(&guard, &self.inner.files.compare_and_swap(&guard, new_arc)) {
-                    return;
-                }
-            } else {
-                // File was deleted during render, just abort the commit.
-                return;
-            }
-        }
-    }
+    // async fn commit_single_result(&self, key: &str, value: Value) {
+    //     loop {
+    //         let guard = self.inner.files.load();
+    //         let mut new_map = (**guard).clone();
+    //         if let Some(k) = new_map.get_mut(key) {
+    //             k.rendered = Some(value.clone());
+    //             let new_arc = Arc::new(new_map);
+    //             if Arc::ptr_eq(&guard, &self.inner.files.compare_and_swap(&guard, new_arc)) {
+    //                 return;
+    //             }
+    //         } else {
+    //             // File was deleted during render, just abort the commit.
+    //             return;
+    //         }
+    //     }
+    // }
 }
-// TODO:
-// - reload on sighup
-// - get /json|yaml|env/<path> or hash ?
 
 fn get_imports(value: &Value) -> Vec<String> {
+    const IMPORT_KEY: &str = "import";
     value
-        .get("import")
+        .get(IMPORT_KEY)
         .and_then(|e| e.as_sequence())
         .map(|seq| {
             seq.iter()
