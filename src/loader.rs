@@ -137,9 +137,9 @@ impl Value {
     /// Convert from internal Value back to serde_yaml::Value
     pub fn to_yaml(&self) -> serde_yaml::Value {
         match self {
-            Value::Number(n) => serde_yaml::Value::Number(serde_yaml::Number::from(n.clone())),
+            Value::Number(n) => serde_yaml::Value::Number(serde_yaml::Number::from(*n)),
             Value::String(s) => serde_yaml::Value::String(s.clone()),
-            Value::Boolean(b) => serde_yaml::Value::Bool(b.clone()),
+            Value::Boolean(b) => serde_yaml::Value::Bool(*b),
             Value::Null => serde_yaml::Value::Null,
             Value::Sequence(seq) => {
                 let yaml_seq: Vec<serde_yaml::Value> = seq.iter().map(|v| v.to_yaml()).collect();
@@ -162,7 +162,7 @@ impl Value {
                 .map(JsonValue::Number)
                 .unwrap_or(JsonValue::Null),
             Value::String(s) => serde_json::Value::String(s.clone()),
-            Value::Boolean(b) => serde_json::Value::Bool(b.clone()),
+            Value::Boolean(b) => serde_json::Value::Bool(*b),
             Value::Null => serde_json::Value::Null,
             Value::Sequence(seq) => {
                 let arr: Vec<JsonValue> = seq.iter().map(|v| v.to_json()).collect();

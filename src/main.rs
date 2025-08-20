@@ -143,12 +143,10 @@ impl Dag {
                 let raw_value = konf.raw.clone();
                 let imports = get_imports(&raw_value);
 
-                let dep_futures: Vec<_> =
-                    imports.iter().map(|key| self.get_rendered(key)).collect();
+                let dep_futures = imports.iter().map(|key| self.get_rendered(key));
 
                 let dep_results = future::try_join_all(dep_futures).await?;
-                let deps_map: HashMap<String, Value> =
-                    imports.into_iter().zip(dep_results).collect();
+                let deps_map = imports.into_iter().zip(dep_results).collect();
 
                 let mut value_to_render = raw_value;
                 resolve_refs_from_deps(&mut value_to_render, &deps_map);
@@ -171,7 +169,7 @@ impl Dag {
             let mut m_folder = self.inner.folder.clone();
             m_folder.push(p);
             let content = fs::read_to_string(m_folder)?;
-            let k = Konf::new(self.inner.multiloader.load(&p, &content)?);
+            let k = Konf::new(self.inner.multiloader.load(p, &content)?);
 
             let path_no_ext = p.split('.').next().ok_or(anyhow!("invalid path"))?;
             files.insert(path_no_ext.to_string(), k);
@@ -188,7 +186,7 @@ impl Dag {
         files_snapshot
             .get(file_path)
             .map(|v| v.raw.clone())
-            .ok_or_else(|| RenderError::All)
+            .ok_or(RenderError::All)
     }
 }
 
