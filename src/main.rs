@@ -1,9 +1,12 @@
 use anyhow::anyhow;
 use arc_swap::ArcSwap;
 use futures::future::{self};
-use konf_provider::loader::{JsonLoader, MultiLoader, MultiWriter, Value, YamlLoader};
+use konf_provider::loader::{Loader, MultiLoader, MultiWriter, Value};
+use konf_provider::loaders::yaml::YamlLoader;
 use konf_provider::render::resolve_refs_from_deps;
 use konf_provider::utils::MyError;
+use konf_provider::writer::json::JsonWriter;
+use konf_provider::writer::yaml::YamlWriter;
 use konf_provider::{DagFiles, Konf, utils};
 use std::collections::HashMap;
 use std::fs;
@@ -21,8 +24,8 @@ use xitca_web::{
 };
 
 #[derive(Debug)]
-struct AppState {
-    dag: Dag,
+struct AppState<L: Loader> {
+    dag: Dag<L>,
     writer: Arc<MultiWriter>,
 }
 
@@ -39,11 +42,12 @@ fn main() -> std::io::Result<()> {
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
-    let folder = "example".parse::<PathBuf>().unwrap();
-    let multiloader = MultiLoader::new(vec![Box::new(YamlLoader {})]);
+
+    let folder = "example".parse().expect("failed to parse folder path");
+    let multiloader = MultiLoader::new(vec![YamlLoader {}]);
     let d = Dag::new(folder, multiloader).expect("failed to read directory");
 
-    let multiwriter = MultiWriter::new(vec![Box::new(YamlLoader {}), Box::new(JsonLoader {})]);
+    let multiwriter = MultiWriter::new(vec![Box::new(YamlWriter {}), Box::new(JsonWriter {})]);
 
     let state = Arc::from(AppState {
         dag: d,
@@ -65,7 +69,7 @@ fn main() -> std::io::Result<()> {
 
 async fn get_data(
     Params(format): Params<String>,
-    StateRef(state): StateRef<'_, AppState>,
+    StateRef(state): StateRef<'_, AppState<YamlLoader>>,
 ) -> Result<String, MyError> {
     // load form commit <hash>:hash(content + filename)
     let d = state
@@ -80,7 +84,7 @@ async fn get_data(
         .ok_or(MyError(anyhow::Error::msg("Failed to get format")))
 }
 
-async fn reload(StateRef(state): StateRef<'_, AppState>) -> Result<String, MyError> {
+async fn reload(StateRef(state): StateRef<'_, AppState<YamlLoader>>) -> Result<String, MyError> {
     state
         .dag
         .reload()
@@ -91,18 +95,18 @@ async fn reload(StateRef(state): StateRef<'_, AppState>) -> Result<String, MyErr
 // The state that will be swapped atomically. It must be cheap to clone the Arc, not the data.
 
 #[derive(Debug)]
-pub struct DagInner {
+pub struct DagInner<L: Loader> {
     // Stable configuration
     folder: PathBuf,
-    multiloader: Arc<MultiLoader>,
+    multiloader: Arc<MultiLoader<L>>,
 
     // The dynamically reloaded, shared state
     files: ArcSwap<DagFiles>,
 }
 
 #[derive(Clone, Debug)]
-pub struct Dag {
-    inner: Arc<DagInner>,
+pub struct Dag<L: Loader> {
+    inner: Arc<DagInner<L>>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,9 +120,9 @@ pub enum MyResult {
     Err(RenderError),
 }
 
-impl Dag {
+impl<L: Loader> Dag<L> {
     // new() now initializes the ArcSwap with the first load
-    pub fn new(folder: PathBuf, multiloader: MultiLoader) -> anyhow::Result<Self> {
+    pub fn new(folder: PathBuf, multiloader: MultiLoader<L>) -> anyhow::Result<Self> {
         let inner = Arc::new(DagInner {
             folder,
             multiloader: Arc::from(multiloader),
