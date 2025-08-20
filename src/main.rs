@@ -1,13 +1,13 @@
+use anyhow::anyhow;
+use arc_swap::ArcSwap;
+use konf_provider::loader::{JsonLoader, MultiLoader, MultiWriter, Value, YamlLoader};
+use konf_provider::render::resolve_refs_with_cache;
+use konf_provider::utils::MyError;
+use konf_provider::{DagFiles, Konf, RenderCache, utils};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-
-use konf_provider::loader::{JsonLoader, MultiLoader, MultiWriter, Value, YamlLoader};
-use konf_provider::render::resolve_refs;
-use konf_provider::utils::MyError;
-use konf_provider::{Konf, utils};
+use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -19,9 +19,9 @@ use xitca_web::{
     route::{get, post},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct AppState {
-    dag: Arc<Mutex<Dag>>,
+    dag: Dag,
     writer: Arc<MultiWriter>,
 }
 
@@ -45,7 +45,7 @@ fn main() -> std::io::Result<()> {
     let multiwriter = MultiWriter::new(vec![Box::new(YamlLoader {}), Box::new(JsonLoader {})]);
 
     let state = Arc::from(AppState {
-        dag: Arc::from(Mutex::new(d)),
+        dag: d,
         writer: Arc::from(multiwriter),
     });
 
@@ -68,10 +68,9 @@ async fn get_data(
 ) -> Result<String, MyError> {
     let d = state
         .dag
-        .lock()
-        .unwrap()
         .get_rendered("c")
         .map_err(|_| MyError(anyhow::Error::msg("missing item")))?;
+
     state
         .writer
         .write(&format, &d)
@@ -79,114 +78,203 @@ async fn get_data(
 }
 
 async fn reload(StateRef(state): StateRef<'_, AppState>) -> Result<String, MyError> {
-    let d = state
+    state
         .dag
-        .lock()
-        .unwrap()
         .reload()
         .map_err(|_| MyError(anyhow::Error::msg("failed to reload conf")))?;
     Ok("OK".to_string())
 }
 
+// The state that will be swapped atomically. It must be cheap to clone the Arc, not the data.
+
 #[derive(Debug)]
 pub struct Dag {
+    // Stable configuration
     folder: PathBuf,
     multiloader: MultiLoader,
-    files: HashMap<String, Konf>,
-    rendering: HashSet<String>,
+
+    // The dynamically reloaded, shared state
+    files: ArcSwap<DagFiles>,
 }
 
 impl Dag {
+    // new() now initializes the ArcSwap with the first load
     pub fn new(folder: PathBuf, multiloader: MultiLoader) -> anyhow::Result<Self> {
-        let mut s = Self {
-            files: HashMap::new(),
+        let s = Self {
             folder,
             multiloader,
-            rendering: HashSet::new(),
+            files: ArcSwap::default(), // Start with an empty HashMap
         };
-        s.reload()?;
+        s.reload()?; // Perform the initial load
         Ok(s)
     }
 
-    fn reload(&mut self) -> anyhow::Result<()> {
+    // reload() now takes &self and updates the ArcSwap
+    pub fn reload(&self) -> anyhow::Result<()> {
         let paths = fs::read_dir(&self.folder)?;
-        let mut files: HashMap<String, Konf> = HashMap::new();
+        let mut files: DagFiles = HashMap::new();
         for path in paths {
             let p1 = path?.file_name();
-            let p = p1
-                .to_str()
-                .ok_or(anyhow::Error::msg("failed to read filename"))?;
+            let p = p1.to_str().ok_or(anyhow!("failed to read filename"))?;
             let mut m_folder = self.folder.clone();
             m_folder.push(p);
             let content = fs::read_to_string(m_folder)?;
             let k = Konf::new(self.multiloader.load(&p, &content)?);
 
-            let path_no_ext = p
-                .split(".")
-                .next()
-                .ok_or(anyhow::Error::msg("invalid path"))?;
+            let path_no_ext = p.split('.').next().ok_or(anyhow!("invalid path"))?;
             files.insert(path_no_ext.to_string(), k);
         }
-        self.files = files;
+
+        // Atomically publish the new HashMap
+        self.files.store(Arc::new(files));
         Ok(())
     }
 
-    pub fn get_rendered(&mut self, file_path: &str) -> anyhow::Result<Value> {
-        if let Some(k) = self.files.get(file_path) {
+    pub fn get_raw(&self, file_path: &str) -> anyhow::Result<Value> {
+        // Load the current snapshot of files to perform the read
+        let files_snapshot = self.files.load();
+        files_snapshot
+            .get(file_path)
+            .map(|v| v.raw.clone())
+            .ok_or_else(|| anyhow!("missing raw file: {}", file_path))
+    }
+
+    pub fn get_rendered(&self, file_path: &str) -> anyhow::Result<Value> {
+        // --- Fast path: Check if already rendered in the current snapshot ---
+        let files_snapshot = self.files.load();
+        if let Some(k) = files_snapshot.get(file_path) {
             if let Some(ref r) = k.rendered {
                 return Ok(r.clone());
             }
         }
-        self.rendering.insert(file_path.to_string());
+        drop(files_snapshot);
 
-        // Get the raw data
-        let raw_data = if let Some(k) = self.files.get(file_path) {
-            k.raw.clone()
-        } else {
-            anyhow::bail!("missing");
-        };
-        let d = raw_data.clone();
+        // --- Slow path: Render and cache the result ---
+        let mut rendering = HashSet::new();
+        // The render logic itself can operate on a momentary, consistent snapshot.
+        let mut render_cache = HashMap::new();
+        let rendered_value = self.render_recursive(
+            file_path,
+            &mut rendering,
+            &mut render_cache,
+            &self.files.load(),
+        )?;
 
-        let mut b = raw_data;
+        // --- Cache the result using the correct "compare-and-swap" (CAS) loop ---
+        loop {
+            // 1. Load the current Arc/Guard. This is our baseline.
+            let current_guard = self.files.load();
 
-        let imports: &Vec<_> = &d
-            .get("import") // set const special key
-            .cloned()
-            .map(|e| {
-                e.as_sequence()
-                    .unwrap()
-                    .iter()
-                    .map(|e| e.as_str().unwrap().to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
-        for k in imports {
-            if self.rendering.contains(k) {
-                continue;
+            // 2. Create the new state based on the current one.
+            let mut new_map = (**current_guard).clone();
+            if let Some(k) = new_map.get_mut(file_path) {
+                k.rendered = Some(rendered_value.clone());
+            } else {
+                return Err(anyhow!("File '{}' disappeared during render", file_path));
             }
-            let _ = self.get_rendered(&k)?; // Handle the Result
+            let new_arc = Arc::new(new_map);
+
+            // 3. Attempt the swap. The function returns the value that was in there
+            //    *just before* our operation.
+            let previous_guard = self.files.compare_and_swap(&current_guard, new_arc);
+
+            // 4. Check for success using pointer equality.
+            if Arc::ptr_eq(&current_guard, &previous_guard) {
+                // SUCCESS: The `previous_guard` points to the *same memory* as our
+                // `current_guard`. This means no other thread changed the value
+                // between our `load` and our `compare_and_swap`. Our update is now committed.
+                break;
+            }
+
+            // FAILURE: Another thread must have called `store` or a successful `compare_and_swap`.
+            // The value we got back is different from our baseline. Our `new_map` is stale.
+            // The loop will now repeat, starting from step 1 with the newer state.
         }
 
-        resolve_refs(&mut b, &self.files);
-        self.set_result(file_path, b.clone());
-        self.rendering.remove(file_path);
-        Ok(b)
+        Ok(rendered_value)
     }
 
-    fn set_result(&mut self, file_path: &str, res: Value) {
-        if let Some(k) = self.files.get_mut(file_path) {
-            k.rendered = Some(res);
+    /// Recursive helper to perform the actual rendering logic.
+    /// It operates on a specific, immutable snapshot of the files.
+    fn render_recursive(
+        &self,
+        file_path: &str,
+        rendering_set: &mut HashSet<String>, // Tracks the current call stack for cycle detection
+        local_cache: &mut RenderCache, // A temporary "scratchpad" for the current top-level operation
+        global_snapshot: &Arc<DagFiles>, // A read-only snapshot of the persistent, shared state
+    ) -> anyhow::Result<Value> {
+        // --- Step 1: Check all available caches before doing any work ---
+
+        // Priority 1: Check the local cache. We might have already rendered it
+        // as a dependency during this *same* top-level `get_rendered` call.
+        if let Some(rendered_value) = local_cache.get(file_path) {
+            return Ok(rendered_value.clone());
         }
-    }
 
-    pub fn get_raw(&self, file_path: &str) -> anyhow::Result<Value> {
-        self.files
+        // Priority 2: Check the global snapshot. It might have been rendered
+        // and cached during a *previous* `get_rendered` call.
+        let konf = global_snapshot
             .get(file_path)
-            .map(|v| v.raw.clone())
-            .ok_or_else(|| anyhow::anyhow!("missing"))
+            .ok_or_else(|| anyhow!("missing file during render: '{}'", file_path))?;
+        if let Some(ref rendered_value) = konf.rendered {
+            return Ok(rendered_value.clone());
+        }
+
+        // --- Step 2: Begin the rendering process (the "slow path") ---
+
+        // First, detect circular dependencies. If we're already in the process of
+        // rendering this file in the current call stack, it's a cycle.
+        if rendering_set.contains(file_path) {
+            return Err(anyhow!(
+                "Circular dependency detected involving '{}'",
+                file_path
+            ));
+        }
+        // Add the current file to the call stack.
+        rendering_set.insert(file_path.to_string());
+
+        // Clone the raw data to have a mutable version to work on.
+        let mut value_to_render = konf.raw.clone();
+
+        // --- Step 3: Recursively render all dependencies (imports) first ---
+
+        let imports = get_imports(&value_to_render);
+        for import_key in &imports {
+            // The recursive call will either return a cached value or render the dependency,
+            // populating the `local_cache` in the process. We just need to ensure it succeeds.
+            self.render_recursive(import_key, rendering_set, local_cache, global_snapshot)?;
+        }
+
+        // --- Step 4: All dependencies are now rendered. Resolve references. ---
+
+        // This function will now be able to find all necessary dependencies by
+        // looking in the `local_cache` and `global_snapshot`.
+        resolve_refs_with_cache(&mut value_to_render, local_cache, global_snapshot);
+
+        // --- Step 5: Finalize and cache the result locally ---
+
+        // Remove the file from the call stack before returning.
+        rendering_set.remove(file_path);
+
+        // CRITICAL: Store the newly rendered value in the local cache. This makes the result
+        // available to other branches of the render tree in this same operation.
+        local_cache.insert(file_path.to_string(), value_to_render.clone());
+
+        Ok(value_to_render)
     }
 }
-
 // TODO:
 // - reload on sighup
 // - get /json|yaml|env/<path> or hash ?
+
+fn get_imports(value: &Value) -> Vec<String> {
+    value
+        .get("import")
+        .and_then(|e| e.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|e| e.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}

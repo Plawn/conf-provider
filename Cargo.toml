@@ -14,3 +14,4 @@ xitca-web = { version = "0.6.2", features = ["json", "logger", "tower-http-compa
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_yaml = "0.9.34"
+arc-swap = "1.7.1"

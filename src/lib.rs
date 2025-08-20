@@ -1,5 +1,7 @@
 #![feature(error_generic_member_access, error_reporter)]
 
+use std::collections::HashMap;
+
 use crate::loader::Value;
 
 pub mod utils;
@@ -22,3 +24,6 @@ impl Konf {
         }
     }
 }
+
+pub type DagFiles = HashMap<String, Konf>;
+pub type RenderCache = HashMap<String, Value>;
