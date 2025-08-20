@@ -7,13 +7,23 @@ edition = "2024"
 log = "0.4.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tower-http = {version = "0.6.2", features = ["trace"]}
+tower-http = { version = "0.6.2", features = ["trace"] }
 anyhow = "1.0.94"
 thiserror = "2.0.9"
-xitca-web = { version = "0.6.2", features = ["json", "logger", "tower-http-compat", "params"] }
+xitca-web = { version = "0.6.2", features = [
+    "json",
+    "logger",
+    "tower-http-compat",
+    "params",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_yaml = "0.9.34"
 arc-swap = "1.7.1"
 futures = "0.3.31"
 dashmap = "6.1.0"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
