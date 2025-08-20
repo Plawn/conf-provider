@@ -15,3 +15,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1" }
 serde_yaml = "0.9.34"
 arc-swap = "1.7.1"
+futures = "0.3.31"
+dashmap = "6.1.0"

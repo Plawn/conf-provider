@@ -1,13 +1,17 @@
 use anyhow::anyhow;
 use arc_swap::ArcSwap;
+use dashmap::{DashMap, Entry};
+use futures::FutureExt;
+use futures::future::{self, Shared};
 use konf_provider::loader::{JsonLoader, MultiLoader, MultiWriter, Value, YamlLoader};
-use konf_provider::render::resolve_refs_with_cache;
+use konf_provider::render::resolve_refs_from_deps;
 use konf_provider::utils::MyError;
-use konf_provider::{DagFiles, Konf, RenderCache, utils};
+use konf_provider::{DagFiles, InFlightFuture, Konf, RenderCache, SharedResult, utils};
 use std::collections::{HashMap, HashSet};
-use std::fs;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::{fmt, fs};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -23,6 +27,21 @@ use xitca_web::{
 struct AppState {
     dag: Dag,
     writer: Arc<MultiWriter>,
+}
+
+// Manual Debug implementation for the handle
+impl fmt::Debug for Dag {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Dag")
+            .field("folder", &self.inner.folder)
+            .field("multiloader", &self.inner.multiloader)
+            .field("files", &self.inner.files.load())
+            .field(
+                "in_flight_renders_count",
+                &self.inner.in_flight_renders.len(),
+            )
+            .finish()
+    }
 }
 
 fn main() -> std::io::Result<()> {
@@ -66,9 +85,11 @@ async fn get_data(
     Params(format): Params<String>,
     StateRef(state): StateRef<'_, AppState>,
 ) -> Result<String, MyError> {
+    // load form commit <hash>:hash(content + filename)
     let d = state
         .dag
         .get_rendered("c")
+        .await
         .map_err(|_| MyError(anyhow::Error::msg("missing item")))?;
 
     state
@@ -88,111 +109,257 @@ async fn reload(StateRef(state): StateRef<'_, AppState>) -> Result<String, MyErr
 // The state that will be swapped atomically. It must be cheap to clone the Arc, not the data.
 
 #[derive(Debug)]
-pub struct Dag {
+pub struct DagInner {
     // Stable configuration
     folder: PathBuf,
-    multiloader: MultiLoader,
+    multiloader: Arc<MultiLoader>,
 
     // The dynamically reloaded, shared state
     files: ArcSwap<DagFiles>,
+
+    in_flight_renders: DashMap<String, InFlightFuture>,
+}
+
+#[derive(Clone)]
+pub struct Dag {
+    inner: Arc<DagInner>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RenderError {
+    All,
+}
+
+#[derive(Debug, Clone)]
+pub enum MyResult {
+    Ok(Value),
+    Err(RenderError),
 }
 
 impl Dag {
     // new() now initializes the ArcSwap with the first load
     pub fn new(folder: PathBuf, multiloader: MultiLoader) -> anyhow::Result<Self> {
-        let s = Self {
+        let inner = Arc::new(DagInner {
             folder,
-            multiloader,
+            multiloader: Arc::from(multiloader),
             files: ArcSwap::default(), // Start with an empty HashMap
-        };
-        s.reload()?; // Perform the initial load
-        Ok(s)
+            in_flight_renders: DashMap::new(),
+        });
+        let handle = Self { inner };
+        handle.reload()?; // Call reload on the new handle
+        Ok(handle)
     }
+    /// This is the refactored, public-facing async function.
+    pub async fn get_rendered(&self, file_path: &str) -> anyhow::Result<Value> {
+        // 1. Fast path: Check persistent cache (no locking needed)
+        if let Some(k) = self.inner.files.load().get(file_path) {
+            if let Some(r) = &k.rendered {
+                return Ok(r.clone());
+            }
+        }
 
+        // 2. Slow path: Coalesce work using a helper function.
+        // The helper returns a future that is guaranteed to be Send.
+        let future_to_await = self.render_or_get_in_flight(file_path);
+
+        // 3. Await the result.
+        let shared_result = future_to_await.await;
+
+        // 4. Clean up the in-flight map for this specific request.
+        self.inner.in_flight_renders.remove(file_path);
+
+        // 5. Convert the internal SharedResult back to the public anyhow::Result.
+        shared_result.map_err(|arc_err| anyhow!(arc_err.to_string()))
+    }
+    fn render_or_get_in_flight(&self, file_path: &str) -> InFlightFuture {
+        // First, do a quick check to see if a future is already in flight.
+        if let Some(entry) = self.inner.in_flight_renders.get(file_path) {
+            return entry.value().clone();
+        }
+
+        // If not, we'll create a new future for rendering.
+        let self_clone = self.clone();
+        let path_owned = file_path.to_string();
+
+        let render_future = async move {
+            let result: anyhow::Result<Value> = async {
+                let global_snapshot = self_clone.inner.files.load();
+                let raw_value = global_snapshot
+                    .get(&path_owned)
+                    .ok_or_else(|| anyhow!("File not found: {}", path_owned))?
+                    .raw
+                    .clone();
+                let imports = get_imports(&raw_value);
+
+                let dep_futures: Vec<_> = imports
+                    .iter()
+                    .map(|key| self_clone.get_rendered(key))
+                    .collect();
+
+                let dep_results = future::try_join_all(dep_futures).await?;
+                let deps_map: HashMap<String, Value> =
+                    imports.into_iter().zip(dep_results).collect();
+
+                let mut value_to_render = raw_value;
+                resolve_refs_from_deps(&mut value_to_render, &deps_map);
+
+                self_clone
+                    .commit_single_result(&path_owned, value_to_render.clone())
+                    .await;
+                Ok(value_to_render)
+            }
+            .await;
+
+            // Convert the final result into the shared format.
+            result.map_err(Arc::new)
+        };
+
+        // This is where we explicitly assert that our future is `Send`.
+        let boxed_future: Pin<Box<dyn futures::Future<Output = SharedResult> + Send + Sync>> =
+            Box::pin(render_future);
+        let shared_future = boxed_future.shared();
+
+        // Now, use the entry API to atomically insert or get the existing future.
+        // This handles the race condition where two threads try to render the same file.
+        match self.inner.in_flight_renders.entry(file_path.to_string()) {
+            Entry::Occupied(entry) => {
+                // Another thread won the race. Use its future.
+                entry.get().clone()
+            }
+            Entry::Vacant(entry) => {
+                // We won the race. Insert our future and return it.
+                entry.insert(shared_future.clone());
+                shared_future
+            }
+        }
+    }
     // reload() now takes &self and updates the ArcSwap
     pub fn reload(&self) -> anyhow::Result<()> {
-        let paths = fs::read_dir(&self.folder)?;
+        let paths = fs::read_dir(&self.inner.folder)?;
         let mut files: DagFiles = HashMap::new();
         for path in paths {
             let p1 = path?.file_name();
             let p = p1.to_str().ok_or(anyhow!("failed to read filename"))?;
-            let mut m_folder = self.folder.clone();
+            let mut m_folder = self.inner.folder.clone();
             m_folder.push(p);
             let content = fs::read_to_string(m_folder)?;
-            let k = Konf::new(self.multiloader.load(&p, &content)?);
+            let k = Konf::new(self.inner.multiloader.load(&p, &content)?);
 
             let path_no_ext = p.split('.').next().ok_or(anyhow!("invalid path"))?;
             files.insert(path_no_ext.to_string(), k);
         }
 
         // Atomically publish the new HashMap
-        self.files.store(Arc::new(files));
+        self.inner.files.store(Arc::new(files));
+        self.inner.in_flight_renders.clear();
         Ok(())
     }
 
-    pub fn get_raw(&self, file_path: &str) -> anyhow::Result<Value> {
+    pub fn get_raw(&self, file_path: &str) -> Result<Value, RenderError> {
         // Load the current snapshot of files to perform the read
-        let files_snapshot = self.files.load();
+        let files_snapshot = self.inner.files.load();
         files_snapshot
             .get(file_path)
             .map(|v| v.raw.clone())
-            .ok_or_else(|| anyhow!("missing raw file: {}", file_path))
+            .ok_or_else(|| RenderError::All)
     }
 
-    pub fn get_rendered(&self, file_path: &str) -> anyhow::Result<Value> {
-        // --- Fast path: Check if already rendered in the current snapshot ---
-        let files_snapshot = self.files.load();
-        if let Some(k) = files_snapshot.get(file_path) {
-            if let Some(ref r) = k.rendered {
+    // New helper to commit just one file's result
+    async fn commit_single_result(&self, key: &str, value: Value) {
+        loop {
+            let guard = self.inner.files.load();
+            let mut new_map = (**guard).clone();
+            if let Some(k) = new_map.get_mut(key) {
+                k.rendered = Some(value.clone());
+                let new_arc = Arc::new(new_map);
+                if Arc::ptr_eq(&guard, &self.inner.files.compare_and_swap(&guard, new_arc)) {
+                    return;
+                }
+            } else {
+                // File was deleted during render, just abort the commit.
+                return;
+            }
+        }
+    }
+    /*
+    pub async fn get_rendered_old(&self, file_path: &str) -> anyhow::Result<Value> {
+        // 1. Fast path: Check persistent cache
+        if let Some(k) = self.inner.files.load().get(file_path) {
+            if let Some(r) = &k.rendered {
                 return Ok(r.clone());
             }
         }
-        drop(files_snapshot);
 
-        // --- Slow path: Render and cache the result ---
-        let mut rendering = HashSet::new();
-        // The render logic itself can operate on a momentary, consistent snapshot.
-        let mut render_cache = HashMap::new();
-        let rendered_value = self.render_recursive(
-            file_path,
-            &mut rendering,
-            &mut render_cache,
-            &self.files.load(),
-        )?;
+        // 2. Slow path: Coalesce work
+        let future_to_await: InFlightFuture;
 
-        // --- Cache the result using the correct "compare-and-swap" (CAS) loop ---
-        loop {
-            // 1. Load the current Arc/Guard. This is our baseline.
-            let current_guard = self.files.load();
+        if let Some(entry) = self.inner.in_flight_renders.get(file_path) {
+            future_to_await = entry.value().clone();
+        } else {
+            let self_clone = self.clone();
+            let path_owned = file_path.to_string();
 
-            // 2. Create the new state based on the current one.
-            let mut new_map = (**current_guard).clone();
-            if let Some(k) = new_map.get_mut(file_path) {
-                k.rendered = Some(rendered_value.clone());
-            } else {
-                return Err(anyhow!("File '{}' disappeared during render", file_path));
+            let render_future = async move {
+                // The body of the future now returns a `SharedResult`
+                let result: anyhow::Result<Value> = async {
+                    let global_snapshot = self_clone.inner.files.load();
+                    let raw_value = global_snapshot
+                        .get(&path_owned)
+                        .ok_or_else(|| anyhow!("File not found: {}", path_owned))?
+                        .raw
+                        .clone();
+                    let imports = get_imports(&raw_value);
+
+                    let dep_futures: Vec<_> = imports
+                        .iter()
+                        .map(|key| self_clone.get_rendered(key))
+                        .collect();
+
+                    let dep_results = future::try_join_all(dep_futures).await?;
+                    let deps_map: HashMap<String, Value> = imports
+                        .into_iter() // Use into_iter to consume the Vec
+                        .zip(dep_results)
+                        .collect();
+
+                    let mut value_to_render = raw_value;
+                    resolve_refs_from_deps(&mut value_to_render, &deps_map);
+
+                    self_clone
+                        .commit_single_result(&path_owned, value_to_render.clone())
+                        .await;
+                    Ok(value_to_render)
+                }
+                .await;
+
+                // FIX 2: Convert the final `Result<Value, Error>` into a `SharedResult`.
+                // If it's an error, wrap it in an Arc.
+                result.map_err(Arc::new)
+            };
+
+            let boxed_future: Pin<Box<dyn Future<Output = SharedResult> + Send + Sync>> =
+                Box::pin(render_future);
+            let shared_future = boxed_future.shared();
+
+            match self.inner.in_flight_renders.entry(file_path.to_string()) {
+                dashmap::mapref::entry::Entry::Occupied(entry) => {
+                    future_to_await = entry.get().clone();
+                }
+                dashmap::mapref::entry::Entry::Vacant(entry) => {
+                    entry.insert(shared_future.clone());
+                    future_to_await = shared_future;
+                }
             }
-            let new_arc = Arc::new(new_map);
-
-            // 3. Attempt the swap. The function returns the value that was in there
-            //    *just before* our operation.
-            let previous_guard = self.files.compare_and_swap(&current_guard, new_arc);
-
-            // 4. Check for success using pointer equality.
-            if Arc::ptr_eq(&current_guard, &previous_guard) {
-                // SUCCESS: The `previous_guard` points to the *same memory* as our
-                // `current_guard`. This means no other thread changed the value
-                // between our `load` and our `compare_and_swap`. Our update is now committed.
-                break;
-            }
-
-            // FAILURE: Another thread must have called `store` or a successful `compare_and_swap`.
-            // The value we got back is different from our baseline. Our `new_map` is stale.
-            // The loop will now repeat, starting from step 1 with the newer state.
         }
 
-        Ok(rendered_value)
+        let shared_result = future_to_await.await;
+        self.inner.in_flight_renders.remove(file_path);
+
+        // FIX 3: Convert the internal `SharedResult` back to a normal `anyhow::Result`
+        // for the public-facing API. We convert the Arc'd error back into a new
+        // anyhow::Error, preserving the message.
+        shared_result.map_err(|arc_err| anyhow!(arc_err.to_string()))
     }
+     */
 
     /// Recursive helper to perform the actual rendering logic.
     /// It operates on a specific, immutable snapshot of the files.
@@ -249,7 +416,7 @@ impl Dag {
 
         // This function will now be able to find all necessary dependencies by
         // looking in the `local_cache` and `global_snapshot`.
-        resolve_refs_with_cache(&mut value_to_render, local_cache, global_snapshot);
+        resolve_refs_from_deps(&mut value_to_render, local_cache);
 
         // --- Step 5: Finalize and cache the result locally ---
 
