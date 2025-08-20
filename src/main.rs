@@ -1,16 +1,13 @@
 use anyhow::anyhow;
 use arc_swap::ArcSwap;
-use dashmap::{DashMap, Entry};
-use futures::FutureExt;
 use futures::future::{self};
 use konf_provider::loader::{JsonLoader, MultiLoader, MultiWriter, Value, YamlLoader};
 use konf_provider::render::resolve_refs_from_deps;
 use konf_provider::utils::MyError;
-use konf_provider::{DagFiles, InFlightFuture, Konf, SharedResult, utils};
+use konf_provider::{DagFiles, Konf, utils};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -19,8 +16,8 @@ use xitca_web::handler::params::Params;
 use xitca_web::middleware::tower_http_compat::TowerHttpCompat;
 use xitca_web::{
     App,
-    handler::{handler_service, json::Json, state::StateRef},
-    route::{get, post},
+    handler::{handler_service, state::StateRef},
+    route::get,
 };
 
 #[derive(Debug)]
@@ -30,18 +27,18 @@ struct AppState {
 }
 
 fn main() -> std::io::Result<()> {
-    // tracing_subscriber::registry()
-    //     .with(
-    //         tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-    //             format!(
-    //                 "{}=debug,tower_http=debug,axum::rejection=trace",
-    //                 env!("CARGO_CRATE_NAME")
-    //             )
-    //             .into()
-    //         }),
-    //     )
-    //     .with(tracing_subscriber::fmt::layer())
-    //     .init();
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                format!(
+                    "{}=debug,tower_http=debug,axum::rejection=trace",
+                    env!("CARGO_CRATE_NAME")
+                )
+                .into()
+            }),
+        )
+        .with(tracing_subscriber::fmt::layer())
+        .init();
     let folder = "example".parse::<PathBuf>().unwrap();
     let multiloader = MultiLoader::new(vec![Box::new(YamlLoader {})]);
     let d = Dag::new(folder, multiloader).expect("failed to read directory");
@@ -59,7 +56,7 @@ fn main() -> std::io::Result<()> {
         .at("/reload", get(handler_service(reload)))
         .at("/data/:format", get(handler_service(get_data)))
         .enclosed_fn(utils::error_handler)
-        // .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
+        .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
         .serve()
         .bind(format!("0.0.0.0:{}", &4000))?
         .run()
@@ -101,8 +98,6 @@ pub struct DagInner {
 
     // The dynamically reloaded, shared state
     files: ArcSwap<DagFiles>,
-
-    in_flight_renders: DashMap<String, InFlightFuture>,
 }
 
 #[derive(Clone, Debug)]
@@ -128,7 +123,6 @@ impl Dag {
             folder,
             multiloader: Arc::from(multiloader),
             files: ArcSwap::default(), // Start with an empty HashMap
-            in_flight_renders: DashMap::new(),
         });
         let handle = Self { inner };
         handle.reload()?; // Call reload on the new handle
@@ -167,69 +161,6 @@ impl Dag {
         Ok(rendered_value.clone())
     }
 
-    // fn render_or_get_in_flight(&self, file_path: &str) -> InFlightFuture {
-    //     // First, do a quick check to see if a future is already in flight.
-    //     if let Some(entry) = self.inner.in_flight_renders.get(file_path) {
-    //         return entry.value().clone();
-    //     }
-
-    //     // If not, we'll create a new future for rendering.
-    //     let self_clone = self.clone();
-    //     let path_owned = file_path.to_string();
-
-    //     let render_future = async move {
-    //         let result: anyhow::Result<Value> = async {
-    //             let global_snapshot = self_clone.inner.files.load();
-    //             let raw_value = global_snapshot
-    //                 .get(&path_owned)
-    //                 .ok_or_else(|| anyhow!("File not found: {}", path_owned))?
-    //                 .raw
-    //                 .clone();
-    //             let imports = get_imports(&raw_value);
-
-    //             let dep_futures: Vec<_> = imports
-    //                 .iter()
-    //                 .map(|key| self_clone.get_rendered(key))
-    //                 .collect();
-
-    //             let dep_results = future::try_join_all(dep_futures).await?;
-    //             let deps_map: HashMap<String, Value> =
-    //                 imports.into_iter().zip(dep_results).collect();
-
-    //             let mut value_to_render = raw_value;
-    //             resolve_refs_from_deps(&mut value_to_render, &deps_map);
-
-    //             self_clone
-    //                 .commit_single_result(&path_owned, value_to_render.clone())
-    //                 .await;
-    //             Ok(value_to_render)
-    //         }
-    //         .await;
-
-    //         // Convert the final result into the shared format.
-    //         result.map_err(Arc::new)
-    //     };
-
-    //     // This is where we explicitly assert that our future is `Send`.
-    //     let boxed_future: Pin<Box<dyn futures::Future<Output = SharedResult> + Send + Sync>> =
-    //         Box::pin(render_future);
-    //     let shared_future = boxed_future.shared();
-
-    //     // Now, use the entry API to atomically insert or get the existing future.
-    //     // This handles the race condition where two threads try to render the same file.
-    //     match self.inner.in_flight_renders.entry(file_path.to_string()) {
-    //         Entry::Occupied(entry) => {
-    //             // Another thread won the race. Use its future.
-    //             entry.get().clone()
-    //         }
-    //         Entry::Vacant(entry) => {
-    //             // We won the race. Insert our future and return it.
-    //             entry.insert(shared_future.clone());
-    //             shared_future
-    //         }
-    //     }
-    // }
-
     // reload() now takes &self and updates the ArcSwap
     pub fn reload(&self) -> anyhow::Result<()> {
         let paths = fs::read_dir(&self.inner.folder)?;
@@ -248,7 +179,6 @@ impl Dag {
 
         // Atomically publish the new HashMap
         self.inner.files.store(Arc::new(files));
-        self.inner.in_flight_renders.clear();
         Ok(())
     }
 
@@ -260,24 +190,6 @@ impl Dag {
             .map(|v| v.raw.clone())
             .ok_or_else(|| RenderError::All)
     }
-
-    // New helper to commit just one file's result
-    // async fn commit_single_result(&self, key: &str, value: Value) {
-    //     loop {
-    //         let guard = self.inner.files.load();
-    //         let mut new_map = (**guard).clone();
-    //         if let Some(k) = new_map.get_mut(key) {
-    //             k.rendered = Some(value.clone());
-    //             let new_arc = Arc::new(new_map);
-    //             if Arc::ptr_eq(&guard, &self.inner.files.compare_and_swap(&guard, new_arc)) {
-    //                 return;
-    //             }
-    //         } else {
-    //             // File was deleted during render, just abort the commit.
-    //             return;
-    //         }
-    //     }
-    // }
 }
 
 fn get_imports(value: &Value) -> Vec<String> {

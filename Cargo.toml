@@ -21,7 +21,6 @@ serde_json = { version = "1" }
 serde_yaml = "0.9.34"
 arc-swap = "1.7.1"
 futures = "0.3.31"
-dashmap = "6.1.0"
 async-once-cell = "0.5"
 
 [profile.release]

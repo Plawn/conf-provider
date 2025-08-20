@@ -137,9 +137,7 @@ impl Value {
     /// Convert from internal Value back to serde_yaml::Value
     pub fn to_yaml(&self) -> serde_yaml::Value {
         match self {
-            Value::Number(n) => {
-                todo!("")
-            }
+            Value::Number(n) => serde_yaml::Value::Number(serde_yaml::Number::from(n.clone())),
             Value::String(s) => serde_yaml::Value::String(s.clone()),
             Value::Boolean(b) => serde_yaml::Value::Bool(b.clone()),
             Value::Null => serde_yaml::Value::Null,
@@ -160,9 +158,9 @@ impl Value {
     pub fn to_json(&self) -> serde_json::Value {
         use serde_json::{Map, Value as JsonValue};
         match self {
-            Value::Number(n) => {
-                todo!("")
-            }
+            Value::Number(n) => serde_json::Number::from_f64(*n)
+                .map(JsonValue::Number)
+                .unwrap_or(JsonValue::Null),
             Value::String(s) => serde_json::Value::String(s.clone()),
             Value::Boolean(b) => serde_json::Value::Bool(b.clone()),
             Value::Null => serde_json::Value::Null,
