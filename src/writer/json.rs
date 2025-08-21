@@ -1,4 +1,4 @@
-use crate::{loader::Value, writer::ValueWriter};
+use crate::{writer::ValueWriter, Value};
 
 #[derive(Debug)]
 pub struct JsonWriter {}

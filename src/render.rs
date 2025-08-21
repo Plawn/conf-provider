@@ -1,61 +1,102 @@
-use std::collections::HashMap;
+use anyhow::anyhow;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::loader::Value;
+use arc_swap::ArcSwap;
+use futures::future;
 
-// --- Assuming Konf, DagFiles, RenderCache, etc. are defined as in the previous answer ---
+use crate::{fs::FileProvider, loader::MultiLoader, render_helper::{get_imports, resolve_refs_from_deps}, DagFiles, Konf, Value};
 
 
-/// Helper to look up a dotted path (e.g., "dependency_file.some.nested.key")
-/// within the pre-rendered dependencies map.
-///
-/// It returns a reference to avoid cloning until the last possible moment.
-fn lookup_in_deps<'a>(path: &str, deps: &'a HashMap<String, Value>) -> Option<&'a Value> {
-    let mut parts = path.split('.');
+#[derive(Debug, Clone)]
+pub enum RenderError {
+    All,
+}
 
-    // The first part of the path is the key to the top-level dependency map.
-    let file_key = parts.next()?; // If path is empty, returns None.
 
-    // Find the root `Value` for this dependency in our map.
-    let mut current = deps.get(file_key)?;
 
-    // Traverse the rest of the path parts to find the nested value.
-    for key in parts {
-        // `serde_yaml::Value` has a convenient `.get()` method for mappings.
-        current = current.get(key)?;
+#[derive(Debug)]
+pub struct DagInner<P: FileProvider> {
+    // Stable configuration
+    file_provider: P,
+    multiloader: Arc<MultiLoader>,
+
+    // The dynamically reloaded, shared state
+    files: ArcSwap<DagFiles>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Dag<P: FileProvider> {
+    inner: Arc<DagInner<P>>,
+}
+
+
+
+impl<P: FileProvider> Dag<P> {
+    // new() now initializes the ArcSwap with the first load
+    pub async fn new(file_provider: P, multiloader: Arc<MultiLoader>) -> anyhow::Result<Self> {
+        let inner = Arc::new(DagInner {
+            file_provider,
+            multiloader,
+            files: ArcSwap::default(), // Start with an empty HashMap
+        });
+        let handle = Self { inner };
+        handle.reload().await?;
+        Ok(handle)
+    }
+    pub async fn get_rendered(&self, file_path: &str) -> anyhow::Result<Value> {
+        let files_snapshot = self.inner.files.load();
+        let konf = files_snapshot
+            .get(file_path)
+            .ok_or_else(|| anyhow!("File not found: {}", file_path))?;
+
+        // This `get_or_try_init` takes a Future, and the whole expression is await-able.
+        // This now correctly matches what the compiler expects.
+        let rendered_value = konf
+            .rendered
+            .get_or_try_init(async {
+                // The async block is now valid
+                let raw_value = konf.raw.clone();
+                let imports = get_imports(&raw_value);
+
+                let dep_futures = imports.iter().map(|key| self.get_rendered(key));
+
+                let dep_results = future::try_join_all(dep_futures).await?;
+                let deps_map = imports.into_iter().zip(dep_results).collect();
+
+                let mut value_to_render = raw_value;
+                resolve_refs_from_deps(&mut value_to_render, &deps_map);
+
+                // The future must resolve to a Result<Value, E>
+                Ok::<_, anyhow::Error>(value_to_render)
+            })
+            .await?; // We await the final result here.
+
+        Ok(rendered_value.clone())
     }
 
-    Some(current)
-}
-/// Traverses a `serde_yaml::Value` and replaces any `"#ref:<path>"` strings
-/// with the corresponding values found in the `deps` map.
-///
-/// This is the final version, which operates on a simple map of fully-rendered dependencies.
-pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) {
-    match value {
-        Value::String(s) => {
-            if let Some(path) = s.strip_prefix("#ref:") {
-                // Use our new, simplified lookup helper.
-                if let Some(replacement) = lookup_in_deps(path, deps) {
-                    // Clone only when we're actually replacing the string with a Value.
-                    *value = replacement.clone();
-                }
-                // Optional: You could log a warning here if a ref is not found.
-                // else { eprintln!("Warning: reference not found for path: {}", path); }
+    // reload() now takes &self and updates the ArcSwap
+    pub async fn reload(&self) -> anyhow::Result<()> {
+        let paths = self.inner.file_provider.list().await;
+        let mut files: DagFiles = HashMap::new();
+
+        for path in paths {
+            if let Some(content) = self.inner.file_provider.load(&path.full_path).await {
+                let k = Konf::new(self.inner.multiloader.load(&path.ext, &content)?);
+                files.insert(path.filename, k);
             }
         }
-        Value::Sequence(arr) => {
-            // Recurse for each item in the array.
-            for v in arr {
-                resolve_refs_from_deps(v, deps);
-            }
-        }
-        Value::Mapping(obj) => {
-            // Recurse for each value in the map.
-            for (_k, v) in obj.iter_mut() {
-                resolve_refs_from_deps(v, deps);
-            }
-        }
-        // Other types (Number, Bool, Null) don't have refs, so we do nothing.
-        _ => {}
+        // Atomically publish the new HashMap
+        self.inner.files.store(Arc::new(files));
+        Ok(())
+    }
+
+    pub fn get_raw(&self, file_path: &str) -> Result<Value, RenderError> {
+        // Load the current snapshot of files to perform the read
+        let files_snapshot = self.inner.files.load();
+        files_snapshot
+            .get(file_path)
+            .map(|v| v.raw.clone())
+            .ok_or(RenderError::All)
     }
 }
+

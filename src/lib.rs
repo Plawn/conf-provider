@@ -4,15 +4,16 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 
 use futures::future::Shared;
 
-use crate::loader::Value;
+
 use async_once_cell::OnceCell;
+use serde::Serialize;
 pub mod utils;
 pub mod writer;
 pub mod loaders;
 pub mod loader;
-
+pub mod fs;
+pub mod render_helper;
 pub mod render;
-
 #[derive(Debug)]
 pub struct Konf {
     pub raw: Value,
@@ -24,6 +25,41 @@ impl Konf {
         Self {
             raw,
             rendered: OnceCell::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum Value {
+    String(String),
+    Sequence(Sequence),
+    Mapping(HashMap<String, Value>),
+    Number(f64),
+    Boolean(bool),
+    Null,
+}
+
+pub type Sequence = Vec<Value>;
+
+impl Value {
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        match self {
+            Value::Mapping(hash_map) => hash_map.get(key),
+            _ => None,
+        }
+    }
+
+    pub fn as_sequence(&self) -> Option<&Sequence> {
+        match self {
+            Value::Sequence(values) => Some(values),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> Option<&String> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
         }
     }
 }

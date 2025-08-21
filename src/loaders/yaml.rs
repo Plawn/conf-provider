@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::loader::{Loader, LoaderError, Value};
+use crate::{loader::{Loader, LoaderError}, Value};
 
 #[derive(Debug)]
 pub struct YamlLoader {}
