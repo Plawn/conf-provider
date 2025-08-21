@@ -1,14 +1,17 @@
 use arc_swap::ArcSwap;
-use dashmap::DashMap;
-use konf_provider::fs::FileProvider;
-use konf_provider::fs::git::{GitFileProvider, list_all_commit_hashes, setup_repository};
-use konf_provider::loader::MultiLoader;
-use konf_provider::loaders::yaml::YamlLoader;
-use konf_provider::render::Dag;
-use konf_provider::utils;
-use konf_provider::utils::MyError;
-use konf_provider::writer::MultiWriter;
-use konf_provider::writer::{json::JsonWriter, yaml::YamlWriter};
+use dashmap::{DashMap, Entry};
+
+use konf_provider::{
+    fs::{
+        FileProvider,
+        git::{GitFileProvider, list_all_commit_hashes, setup_repository},
+    },
+    loader::MultiLoader,
+    loaders::yaml::YamlLoader,
+    render::Dag,
+    utils::{self, GetError, MyError},
+    writer::{MultiWriter, json::JsonWriter, yaml::YamlWriter},
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,9 +78,6 @@ fn main() -> std::io::Result<()> {
         commits: ArcSwap::from(Arc::from(commits)),
         multiloader: Arc::from(MultiLoader::new(vec![Box::new(YamlLoader {})])),
     });
-    // let rt = tokio::runtime::Runtime::new().unwrap();
-    // rt.block_on(state.dag.reload())
-    //     .expect("failed to initialyze");
 
     App::new()
         .with_state(state)
@@ -101,29 +101,30 @@ fn main() -> std::io::Result<()> {
 async fn get_data(
     Params((commit, format, path)): Params<(String, String, String)>,
     StateRef(state): StateRef<'_, AppState<GitFileProvider>>,
-) -> Result<String, MyError> {
+) -> Result<String, GetError> {
+    
     if !state.commits.load().contains(&commit) {
-        return Err(MyError(anyhow::Error::msg("Commit not found")));
+        return Err(GetError::CommitNotFound);
     }
-    let dag = match state.dag.contains_key(&commit) {
-        true => state.dag.get(&commit).unwrap(),
-        false => {
+    
+    let dag = match state.dag.entry(commit.clone()) {
+        Entry::Occupied(entry) => entry.into_ref(),
+        Entry::Vacant(entry) => {
             let fs = GitFileProvider::new(&state.repo_config.url, &commit)
                 .await
-                .unwrap();
-            let d = Dag::new(fs, state.multiloader.clone()).await.unwrap();
-            state.dag.insert(commit.clone(), d);
-            state.dag.get(&commit).unwrap()
+                .map_err(|_| GetError::CommitNotFound)?; // should never happen, we already checked
+            let d = Dag::new(fs, state.multiloader.clone())
+                .await
+                .map_err(|_| GetError::MissingItem)?;
+            entry.insert(d)
         }
     };
     let d = dag
         .get_rendered(&path)
         .await
-        .map_err(|_| MyError(anyhow::Error::msg("missing item")))?;
-    return state
-        .writer
-        .write(&format, &d)
-        .ok_or(MyError(anyhow::Error::msg("Failed to get format")));
+        .map_err(|_| GetError::MissingItem)?;
+
+    state.writer.write(&format, &d).ok_or(GetError::FormatError)
 }
 
 /// reload the commit set
@@ -134,5 +135,3 @@ async fn reload(
     state.commits.store(Arc::from(commits));
     Ok("OK".to_string())
 }
-
-// The state that will be swapped atomically. It must be cheap to clone the Arc, not the data.

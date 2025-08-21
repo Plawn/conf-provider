@@ -1,12 +1,12 @@
+use std::{convert::Infallible, error, fmt};
 
-use std::{convert::Infallible, error, fmt, fs::File, io::Read, path::PathBuf};
-
+use serde::Serialize;
 use xitca_web::{
+    WebContext,
     error::{Error, MatchError},
-    handler::{html::Html, Responder},
+    handler::{Responder, html::Html},
     http::{StatusCode, WebResponse},
     service::Service,
-    WebContext,
 };
 
 // a custom error type. must implement following traits:
@@ -52,17 +52,6 @@ impl<'r, C> Service<WebContext<'r, C>> for MyError {
         StatusCode::INTERNAL_SERVER_ERROR.call(ctx).await
     }
 }
-
-// This enables using `?` on functions that return `Result<_, anyhow::Error>` to turn them into
-// `Result<_, AppError>`. That way you don't need to do that manually.
-// impl<E> From<E> for MyError
-// where
-//     E: Into<anyhow::Error>,
-// {
-//     fn from(err: E) -> Self {
-//         Self(err.into())
-//     }
-// }
 
 // a middleware function used for intercept and interact with app handler outputs.
 pub async fn error_handler<S, C>(s: &S, mut ctx: WebContext<'_, C>) -> Result<WebResponse, Error<C>>
@@ -117,9 +106,49 @@ where
     }
 }
 
-pub fn read_file(path: &PathBuf) -> Result<Vec<u8>, std::io::Error> {
-    let mut f = File::open(path)?;
-    let mut res = vec![];
-    f.read_to_end(&mut res)?;
-    Ok(res)
+#[derive(Debug, Serialize)]
+pub enum GetError {
+    CommitNotFound,
+    MissingItem,
+    FormatError,
+    Unauthorized,
+}
+
+impl fmt::Display for GetError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Get error")
+    }
+}
+
+impl error::Error for GetError {
+    // necessary for providing backtrace to xitca_web::error::Error instance.
+    fn provide<'a>(&'a self, request: &mut error::Request<'a>) {
+        request.provide_ref(self);
+    }
+}
+
+// Error<C> is the main error type xitca-web uses and at some point MyError would
+// need to be converted to it.
+impl<C> From<GetError> for Error<C> {
+    fn from(e: GetError) -> Self {
+        Error::from_service(e)
+    }
+}
+
+// response generator of MyError. in this case we generate blank bad request error.
+impl<'r, C> Service<WebContext<'r, C>> for GetError {
+    type Response = WebResponse;
+    type Error = Infallible;
+
+    async fn call(&self, ctx: WebContext<'r, C>) -> Result<Self::Response, Self::Error> {
+        // StatusCode::INTERNAL_SERVER_ERROR.call(ctx).await
+        match self {
+            GetError::CommitNotFound => StatusCode::NOT_FOUND,
+            GetError::MissingItem => StatusCode::NOT_FOUND,
+            GetError::FormatError => StatusCode::INTERNAL_SERVER_ERROR,
+            GetError::Unauthorized => StatusCode::UNAUTHORIZED,
+        }
+        .call(ctx)
+        .await
+    }
 }

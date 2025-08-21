@@ -4,7 +4,7 @@ use std::{collections::HashMap, sync::Arc};
 use arc_swap::ArcSwap;
 use futures::future;
 
-use crate::{fs::FileProvider, loader::MultiLoader, render_helper::{get_imports, resolve_refs_from_deps}, DagFiles, Konf, Value};
+use crate::{fs::FileProvider, loader::{LoaderError, MultiLoader}, render_helper::{get_imports, resolve_refs_from_deps}, DagFiles, Konf, Value};
 
 
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ impl<P: FileProvider> Dag<P> {
     }
 
     // reload() now takes &self and updates the ArcSwap
-    pub async fn reload(&self) -> anyhow::Result<()> {
+    pub async fn reload(&self) -> Result<(), LoaderError> {
         let paths = self.inner.file_provider.list().await;
         let mut files: DagFiles = HashMap::new();
 
