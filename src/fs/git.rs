@@ -158,8 +158,16 @@ impl FileProvider for GitFileProvider {
 }
 
 /// Walks the Git history and collects all reachable commit hashes.
-pub fn list_all_commit_hashes(repo_path: &Path) -> Result<HashSet<String>, Error> {
+pub fn list_all_commit_hashes(
+    repo_path: &Path,
+    branch_name: &str,
+    update: bool,
+) -> Result<HashSet<String>, Error> {
     let repo = Repository::open(repo_path)?;
+    if update {
+        repo.find_remote("origin")?
+            .fetch(&[branch_name], None, None)?;
+    }
     let mut revwalk = repo.revwalk()?;
     revwalk.push_glob("refs/*")?; // Pushes HEAD, all branches, all tags, all remotes
 
@@ -170,7 +178,7 @@ pub fn list_all_commit_hashes(repo_path: &Path) -> Result<HashSet<String>, Error
 
 /// Clones or opens a repository in a local cache directory.
 /// Returns the path to the repository.
-pub fn setup_repository(repo_url: &str) -> Result<PathBuf> {
+pub fn setup_repository(repo_url: &str, branch_name: &str) -> Result<PathBuf> {
     // Determine a stable cache path from the repository URL
     let mut hasher = Sha256::new();
     hasher.update(repo_url.as_bytes());
@@ -186,7 +194,8 @@ pub fn setup_repository(repo_url: &str) -> Result<PathBuf> {
     if repo_path_clone.exists() {
         println!("Repository exists. Fetching updates...");
         let repo = Repository::open(&repo_path_clone)?;
-        repo.find_remote("origin")?.fetch(&["main"], None, None)?;
+        repo.find_remote("origin")?
+            .fetch(&[branch_name], None, None)?;
     } else {
         println!("Cloning repository from {}...", repo_url_clone);
         std::fs::create_dir_all(&repo_path_clone.parent().unwrap())?;

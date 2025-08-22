@@ -18,18 +18,23 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use xitca_web::handler::params::Params;
-use xitca_web::middleware::tower_http_compat::TowerHttpCompat;
 use xitca_web::{
     App,
     handler::{handler_service, state::StateRef},
     route::get,
 };
+use xitca_web::{
+    error::Error,
+    handler::header::{self, HeaderRef},
+    http::{Method, WebResponse},
+};
+use xitca_web::{handler::params::Params, http::Request};
+use xitca_web::{http::RequestExt, middleware::tower_http_compat::TowerHttpCompat};
 
 #[derive(Debug)]
 struct RepoConfig {
     url: String,
+    branch: String,
     path: PathBuf,
 }
 #[derive(Debug)]
@@ -63,11 +68,11 @@ fn main() -> std::io::Result<()> {
 
     // should be a param
     let url = "https://github.com/Plawn/configuration.git";
-
-    let repo_path = setup_repository(url).unwrap();
+    let branch = "main";
+    let repo_path = setup_repository(url, branch).unwrap();
     // let folder = "example".parse().expect("failed to parse folder path");
 
-    let commits = list_all_commit_hashes(&repo_path).unwrap();
+    let commits = list_all_commit_hashes(&repo_path, branch, false).unwrap();
 
     // keep this to work locally
     // let d =
@@ -75,10 +80,11 @@ fn main() -> std::io::Result<()> {
 
     let multiwriter = MultiWriter::new(vec![Box::new(YamlWriter {}), Box::new(JsonWriter {})]);
 
-    let state = Arc::from(AppState {
+    let state: Arc<AppState<GitFileProvider>> = Arc::from(AppState {
         repo_config: RepoConfig {
             path: repo_path,
             url: url.to_string(),
+            branch: branch.to_string(),
         },
         dag: DashMap::new(),
         writer: Arc::from(multiwriter),
@@ -91,7 +97,7 @@ fn main() -> std::io::Result<()> {
         .at("/live", get(handler_service(async || "OK")))
         .at("/reload", get(handler_service(reload)))
         .at(
-            "/data/:commit/:format/*rest", // url is ok
+            "/data/:commit/:format/:token/*rest", // url is ok
             get(handler_service(get_data)),
         )
         .enclosed_fn(utils::error_handler)
@@ -102,7 +108,7 @@ fn main() -> std::io::Result<()> {
         .wait()
 }
 
-pub async fn new_dag(
+async fn new_dag(
     repo_url: &str,
     commit: &str,
     multiloader: Arc<MultiLoader>,
@@ -117,11 +123,37 @@ pub async fn new_dag(
     Ok(DagEntry { dag: d, authorizer })
 }
 
-// add security
-// check token from header
-// should have a token which authorize to read a prefix
+use xitca_web::WebContext;
+use xitca_web::{
+    body::ResponseBody,
+    handler::{Responder, handler_sync_service},
+    service::fn_service,
+};
+// function with concrete typed input and output where http types
+// are handled manually and explicitly.
+// it can also be seen as a desugar of previous example of
+// handler_service(high)
+async fn low(ctx: WebContext<'_>) -> Result<WebResponse, Error> {
+    // extract method from request context.
+    let method = ctx.extract().await?;
+    // execute high level abstraction example function.
+    let str = high(method).await;
+    // convert string literal to http response.
+    str.respond(ctx).await
+}
+// magic function with arbitrary receiver type and output type
+// that can be extracted from http requests and packed into http
+// response.
+async fn high(method: &Method) -> &'static str {
+    // extract http method from http request.
+    assert_eq!(method, Method::GET);
+    // pack string literal into http response.
+    "high level"
+}
+// fix proper token sourcing
+// -> should be in headers
 async fn get_data(
-    Params((commit, format, path)): Params<(String, String, String)>,
+    Params((commit, format, token, path)): Params<(String, String, String, String)>,
     StateRef(state): StateRef<'_, AppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
     if !state.commits.load().contains(&commit) {
@@ -131,10 +163,12 @@ async fn get_data(
     let dag = match state.dag.entry(commit.clone()) {
         Entry::Occupied(entry) => entry.into_ref(),
         Entry::Vacant(entry) => {
-            entry.insert(new_dag(&state.repo_config.url, &commit, state.multiloader.clone()).await?)
+            let d = new_dag(&state.repo_config.url, &commit, state.multiloader.clone()).await?;
+            entry.insert(d)
         }
     };
-    if dag.authorizer.authorize(&path, "") {
+
+    if dag.authorizer.authorize(&path, &token) {
         let d = dag
             .dag
             .get_rendered(&path)
@@ -151,7 +185,9 @@ async fn get_data(
 async fn reload(
     StateRef(state): StateRef<'_, AppState<GitFileProvider>>,
 ) -> Result<String, MyError> {
-    let commits = list_all_commit_hashes(&state.repo_config.path).unwrap();
+    // TODO: add fetch before list
+    let commits =
+        list_all_commit_hashes(&state.repo_config.path, &state.repo_config.branch, true).unwrap();
     state.commits.store(Arc::from(commits));
     Ok("OK".to_string())
 }

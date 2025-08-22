@@ -37,7 +37,7 @@ impl error::Error for MyError {
 
 // Error<C> is the main error type xitca-web uses and at some point MyError would
 // need to be converted to it.
-impl<C> From<MyError> for Error<C> {
+impl From<MyError> for Error {
     fn from(e: MyError) -> Self {
         Error::from_service(e)
     }
@@ -54,9 +54,9 @@ impl<'r, C> Service<WebContext<'r, C>> for MyError {
 }
 
 // a middleware function used for intercept and interact with app handler outputs.
-pub async fn error_handler<S, C>(s: &S, mut ctx: WebContext<'_, C>) -> Result<WebResponse, Error<C>>
+pub async fn error_handler<S, C>(s: &S, mut ctx: WebContext<'_, C>) -> Result<WebResponse, Error>
 where
-    S: for<'r> Service<WebContext<'r, C>, Response = WebResponse, Error = Error<C>>,
+    S: for<'r> Service<WebContext<'r, C>, Response = WebResponse, Error = Error>,
 {
     match s.call(ctx.reborrow()).await {
         Ok(res) => Ok(res),
@@ -64,12 +64,9 @@ where
             // debug format error info.
             println!("{e:?}");
 
-            // display format error info.
-            println!("{e}");
-
             // generate http response actively. from here it's OK to early return it in Result::Ok
             // variant as error_handler function's output
-            let _res = e.call(ctx.reborrow()).await?;
+            // let _res = e.call(ctx.reborrow()).await?;
             // return Ok(_res);
 
             // upcast trait and downcast to concrete type again.
@@ -106,7 +103,7 @@ where
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub enum GetError {
     CommitNotFound,
     MissingItem,
@@ -129,7 +126,7 @@ impl error::Error for GetError {
 
 // Error<C> is the main error type xitca-web uses and at some point MyError would
 // need to be converted to it.
-impl<C> From<GetError> for Error<C> {
+impl From<GetError> for Error {
     fn from(e: GetError) -> Self {
         Error::from_service(e)
     }
