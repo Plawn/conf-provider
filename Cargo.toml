@@ -27,6 +27,7 @@ dashmap = "6.1.0"
 git2 = "0.18"
 sha2 = "0.10"
 hex = "0.4"
+clap = {version = "4.5.45", features = ["derive"]}
 
 
 [profile.release]

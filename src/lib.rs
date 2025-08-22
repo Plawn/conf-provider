@@ -6,6 +6,8 @@ use futures::future::Shared;
 
 use async_once_cell::OnceCell;
 use serde::Serialize;
+
+use crate::{authorizer::Authorizer, fs::FileProvider, render::Dag};
 pub mod utils;
 pub mod writer;
 pub mod loaders;
@@ -14,6 +16,9 @@ pub mod fs;
 pub mod render_helper;
 pub mod render;
 pub mod authorizer;
+pub mod main_git;
+pub mod main_local;
+pub mod config;
 #[derive(Debug)]
 pub struct Konf {
     pub raw: Value,
@@ -27,6 +32,12 @@ impl Konf {
             rendered: OnceCell::new(),
         }
     }
+}
+
+#[derive(Debug)]
+pub struct DagEntry<P: FileProvider> {
+    pub dag: Dag<P>,
+    pub authorizer: Authorizer,
 }
 
 #[derive(Debug, Clone, Serialize)]
