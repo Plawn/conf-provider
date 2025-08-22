@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use dashmap::{DashMap, Entry};
 
 use konf_provider::{
+    authorizer::Authorizer,
     fs::{
         FileProvider,
         git::{GitFileProvider, list_all_commit_hashes, setup_repository},
@@ -31,10 +32,15 @@ struct RepoConfig {
     url: String,
     path: PathBuf,
 }
+#[derive(Debug)]
+struct DagEntry<P: FileProvider> {
+    dag: Dag<P>,
+    authorizer: Authorizer,
+}
 
 #[derive(Debug)]
 struct AppState<P: FileProvider> {
-    dag: DashMap<String, Dag<P>>,
+    dag: DashMap<String, DagEntry<P>>,
     writer: Arc<MultiWriter>,
     commits: ArcSwap<HashSet<String>>,
     multiloader: Arc<MultiLoader>,
@@ -63,6 +69,7 @@ fn main() -> std::io::Result<()> {
 
     let commits = list_all_commit_hashes(&repo_path).unwrap();
 
+    // keep this to work locally
     // let d =
     //     Dag::new(BasicFsFileProvider::new(folder), multiloader).expect("failed to read directory");
 
@@ -95,6 +102,21 @@ fn main() -> std::io::Result<()> {
         .wait()
 }
 
+pub async fn new_dag(
+    repo_url: &str,
+    commit: &str,
+    multiloader: Arc<MultiLoader>,
+) -> Result<DagEntry<GitFileProvider>, GetError> {
+    let fs = GitFileProvider::new(repo_url, &commit)
+        .await
+        .map_err(|_| GetError::CommitNotFound)?; // should never happen, we already checked
+    let authorizer = Authorizer::new(&fs, &multiloader).await;
+    let d = Dag::new(fs, multiloader)
+        .await
+        .map_err(|_| GetError::MissingItem)?;
+    Ok(DagEntry { dag: d, authorizer })
+}
+
 // add security
 // check token from header
 // should have a token which authorize to read a prefix
@@ -102,29 +124,27 @@ async fn get_data(
     Params((commit, format, path)): Params<(String, String, String)>,
     StateRef(state): StateRef<'_, AppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
-    
     if !state.commits.load().contains(&commit) {
         return Err(GetError::CommitNotFound);
     }
-    
+
     let dag = match state.dag.entry(commit.clone()) {
         Entry::Occupied(entry) => entry.into_ref(),
         Entry::Vacant(entry) => {
-            let fs = GitFileProvider::new(&state.repo_config.url, &commit)
-                .await
-                .map_err(|_| GetError::CommitNotFound)?; // should never happen, we already checked
-            let d = Dag::new(fs, state.multiloader.clone())
-                .await
-                .map_err(|_| GetError::MissingItem)?;
-            entry.insert(d)
+            entry.insert(new_dag(&state.repo_config.url, &commit, state.multiloader.clone()).await?)
         }
     };
-    let d = dag
-        .get_rendered(&path)
-        .await
-        .map_err(|_| GetError::MissingItem)?;
+    if dag.authorizer.authorize(&path, "") {
+        let d = dag
+            .dag
+            .get_rendered(&path)
+            .await
+            .map_err(|_| GetError::MissingItem)?;
 
-    state.writer.write(&format, &d).ok_or(GetError::FormatError)
+        state.writer.write(&format, &d).ok_or(GetError::FormatError)
+    } else {
+        Err(GetError::CommitNotFound)
+    }
 }
 
 /// reload the commit set

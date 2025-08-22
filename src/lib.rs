@@ -14,6 +14,7 @@ pub mod loader;
 pub mod fs;
 pub mod render_helper;
 pub mod render;
+pub mod authorizer;
 #[derive(Debug)]
 pub struct Konf {
     pub raw: Value,

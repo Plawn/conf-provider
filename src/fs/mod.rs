@@ -1,7 +1,7 @@
 pub mod fs;
 pub mod git;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DirEntry {
     /// Without extension
     pub filename: String,
@@ -10,6 +10,8 @@ pub struct DirEntry {
     /// Extension of the file
     pub ext: String,
 }
+
+// TODO: should read using a token which is valid for the given prefix
 
 pub trait FileProvider {
     async fn load(&self, path: &str) -> Option<String>;
