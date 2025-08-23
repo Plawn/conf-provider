@@ -28,9 +28,18 @@ use xitca_web::middleware::tower_http_compat::TowerHttpCompat;
 use xitca_web::{App, handler::handler_service, route::get};
 
 #[derive(Debug, clap::Parser)]
+#[command(version, about, long_about = None)]
 enum Args {
-    Git { repo_url: String, branch: String },
-    Local { folder: PathBuf },
+    Git {
+        #[arg(long)]
+        repo_url: String,
+        #[arg(long)]
+        branch: String,
+    },
+    Local {
+        #[arg(long)]
+        folder: PathBuf,
+    },
 }
 
 fn main() -> std::io::Result<()> {
@@ -89,7 +98,8 @@ fn main() -> std::io::Result<()> {
                 .wait()
         }
         Args::Git { repo_url, branch } => {
-            let repo_path = setup_repository(&repo_url, &branch).expect("failed to initialyze repository");
+            let repo_path =
+                setup_repository(&repo_url, &branch).expect("failed to initialyze repository");
 
             let commits = list_all_commit_hashes(&repo_url, &branch, false).unwrap();
 

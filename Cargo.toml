@@ -35,3 +35,13 @@ toml = "0.9.5"
 strip = true
 lto = true
 codegen-units = 1
+
+
+[[bin]]
+name = "cache"
+path = "src/cache_helper.rs"
+
+
+[[bin]]
+name = "server"
+path = "src/main.rs"

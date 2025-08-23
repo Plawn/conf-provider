@@ -1,7 +1,7 @@
 
 
 start-git:
-    cargo run -- git "https://github.com/Plawn/configuration.git" "main"
+    cargo run --bin server -- git --repo-url "https://github.com/Plawn/configuration.git" --branch "main"
 
 start-local:
-    cargo run -- local example
+    cargo run --bin server -- local --folder example
