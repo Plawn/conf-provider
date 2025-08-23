@@ -4,7 +4,8 @@ import:
 
 value:
   l: '#ref:a.value'
-  b: dez
+  b: 
+    - name: '#ref:b.pm'
 
 
 zed: '#ref:b.pm'

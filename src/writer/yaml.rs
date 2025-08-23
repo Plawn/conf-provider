@@ -32,3 +32,9 @@ pub fn to_yaml(value: &Value) -> serde_yaml::Value {
         }
     }
 }
+
+impl YamlWriter {
+    pub fn new_boxed() -> Box<Self> {
+        Box::new(Self{})
+    }
+}

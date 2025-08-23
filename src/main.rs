@@ -3,6 +3,8 @@ use clap::Parser;
 use dashmap::DashMap;
 
 use konf_provider::main_local::{get_data_local, reload_local};
+use konf_provider::writer::env::EnvVarWriter;
+use konf_provider::writer::properties::PropertiesWriter;
 use konf_provider::{
     config::{GitAppState, LocalAppState, RepoConfig},
     fs::{
@@ -45,12 +47,17 @@ fn main() -> std::io::Result<()> {
         .init();
 
     let args = Args::parse();
-    let multiwriter = MultiWriter::new(vec![Box::new(YamlWriter {}), Box::new(JsonWriter {})]);
+    let multiwriter = MultiWriter::new(vec![
+        YamlWriter::new_boxed(),
+        JsonWriter::new_boxed(),
+        EnvVarWriter::new_boxed(),
+        PropertiesWriter::new_boxed(),
+    ]);
 
     match args {
         Args::Local { folder } => {
             let multiloader = Arc::from(MultiLoader::new(vec![Box::new(YamlLoader {})]));
-            let rt = Runtime::new().unwrap();
+            let rt = Runtime::new().expect("failed to get tokio runtime");
 
             // Run the async function in sync context
             let dag = rt
@@ -71,10 +78,7 @@ fn main() -> std::io::Result<()> {
                 .with_state(state)
                 .at("/live", get(handler_service(async || "OK")))
                 .at("/reload", get(handler_service(reload_local)))
-                .at(
-                    "/data/:format/*rest", // url is ok
-                    get(handler_service(get_data_local)),
-                )
+                .at("/data/:format/*rest", get(handler_service(get_data_local)))
                 .enclosed_fn(utils::error_handler)
                 .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
                 .serve()
@@ -104,7 +108,7 @@ fn main() -> std::io::Result<()> {
                 .at("/live", get(handler_service(async || "OK")))
                 .at("/reload", get(handler_service(reload_git)))
                 .at(
-                    "/data/:commit/:format/:token/*rest", // url is ok
+                    "/data/:commit/:format/:token/*rest",
                     get(handler_service(get_data_git)),
                 )
                 .enclosed_fn(utils::error_handler)

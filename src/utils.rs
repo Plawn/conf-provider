@@ -1,6 +1,5 @@
 use std::{convert::Infallible, error, fmt};
 
-use serde::Serialize;
 use xitca_web::{
     WebContext,
     error::{Error, MatchError},

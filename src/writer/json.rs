@@ -35,3 +35,9 @@ pub fn to_json(value: &Value) -> serde_json::Value {
         }
     }
 }
+
+impl JsonWriter {
+    pub fn new_boxed() -> Box<Self> {
+        Box::new(Self{})
+    }
+}

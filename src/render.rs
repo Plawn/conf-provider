@@ -66,6 +66,10 @@ impl<P: FileProvider> Dag<P> {
                 let mut value_to_render = raw_value;
                 resolve_refs_from_deps(&mut value_to_render, &deps_map);
 
+                if let Value::Mapping(ref mut m) = value_to_render {
+                    m.remove("auth");
+                };
+
                 // The future must resolve to a Result<Value, E>
                 Ok::<_, anyhow::Error>(value_to_render)
             })
