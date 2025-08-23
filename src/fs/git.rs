@@ -1,5 +1,6 @@
-use anyhow::Result;
-use git2::Error;
+use anyhow::{Result, anyhow};
+use git2::build::RepoBuilder;
+use git2::{Cred, Error, FetchOptions, RemoteCallbacks};
 use git2::{Oid, Repository};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -64,33 +65,24 @@ impl GitFileProvider {
     /// Creates a new GitFileProvider.
     /// This will clone the repository if it's not already cached locally,
     /// or fetch the latest changes if it is.
-    pub async fn new(repo_url: &str, branch_name: &str, commit_hash: &str) -> Result<Self> {
+    pub async fn new(repo_url: &str, commit_hash: &str) -> Result<Self> {
         // 1. Determine a stable cache path from the repository URL.
         // This ensures the same URL always uses the same local directory.
         let repo_path = get_git_directory(repo_url);
-        let repo_url = repo_url.to_string();
         // 2. Clone or fetch the repo. This is a blocking operation.
         let repo_path_clone = repo_path.clone();
-        let branch_name_clone = branch_name.to_string().clone();
-        tokio::task::spawn_blocking(move || {
+        let repo = tokio::task::spawn_blocking(move || {
             if repo_path_clone.exists() {
                 // If the repo exists, open it and fetch updates.
                 let repo = Repository::open(&repo_path_clone)?;
-                println!("Repository exists. Fetching updates..."); // TODO: use logging instead
-                repo.find_remote("origin")?
-                    .fetch(&[branch_name_clone], None, None)?; // Fetches the 'main' branch, adjust if needed
+                return Ok(repo);
             } else {
-                // If it doesn't exist, clone it.
-                println!("Cloning repository from {}...", repo_url); // TODO: use logging instead
-                std::fs::create_dir_all(&repo_path_clone.parent().unwrap())?;
-                Repository::clone(&repo_url, &repo_path_clone)?;
+                Err(anyhow!("repo should have been init already"))
             }
-            Ok::<(), anyhow::Error>(())
         })
         .await??;
 
         // 3. Verify that the commit exists in the local repository.
-        let repo = Repository::open(&repo_path)?;
         let commit_oid = Oid::from_str(commit_hash)?;
         repo.find_commit(commit_oid)
             .map_err(|e| anyhow::anyhow!("Commit '{}' not found: {}", commit_hash, e))?;
@@ -171,16 +163,9 @@ impl FileProvider for GitFileProvider {
 }
 
 /// Walks the Git history and collects all reachable commit hashes.
-pub fn list_all_commit_hashes(
-    repo_url: &str,
-    branch_name: &str,
-    update: bool,
-) -> Result<HashSet<String>, Error> {
-    let repo = Repository::open(get_git_directory(repo_url))?;
-    if update {
-        repo.find_remote("origin")?
-            .fetch(&[branch_name], None, None)?;
-    }
+pub fn list_all_commit_hashes(repo_url: &str) -> Result<HashSet<String>, Error> {
+    let path = get_git_directory(repo_url);
+    let repo = Repository::open(&path)?;
     let mut revwalk = repo.revwalk()?;
     revwalk.push_glob("refs/*")?; // Pushes HEAD, all branches, all tags, all remotes
 
@@ -189,25 +174,84 @@ pub fn list_all_commit_hashes(
         .collect::<Result<HashSet<String>, Error>>()
 }
 
-/// Clones or opens a repository in a local cache directory.
-/// Returns the path to the repository.
-pub fn setup_repository(repo_url: &str, branch_name: &str) -> Result<PathBuf> {
-    let repo_path = get_git_directory(repo_url);
+#[derive(Debug, Clone)]
+pub struct Creds {
+    username: String,
+    password: String,
+}
 
-    // Clone or fetch the repo. This is a blocking operation.
-    let repo_path_clone = repo_path.clone();
-    let repo_url_clone = repo_url.to_string();
-
-    if repo_path_clone.exists() {
-        println!("Repository exists. Fetching updates...");
-        let repo = Repository::open(&repo_path_clone)?;
-        repo.find_remote("origin")?
-            .fetch(&[branch_name], None, None)?;
-    } else {
-        println!("Cloning repository from {}...", repo_url_clone);
-        std::fs::create_dir_all(&repo_path_clone.parent().unwrap())?;
-        Repository::clone(&repo_url_clone, &repo_path_clone)?;
+impl Creds {
+    pub fn new(username: String, password: String) -> Self {
+        Self { username, password }
     }
+}
 
-    Ok(repo_path)
+fn create_auth_options(creds: Creds) -> FetchOptions<'static> {
+    let mut callbacks = RemoteCallbacks::new();
+
+    // The 'move' closure takes ownership of the credentials (`creds`).
+    // This ensures the username and password live as long as the callback does.
+    callbacks.credentials(move |_url, _username_from_git, _allowed_types| {
+        Cred::userpass_plaintext(&creds.username, &creds.password)
+    });
+
+    let mut fetch_options = FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+    fetch_options
+}
+
+// ensure only one execution at any given time
+pub async fn clone_or_update(
+    repo_url: &str,
+    branch_name: &str,
+    creds: &Option<Creds>,
+) -> Result<Repository> {
+    let creds = creds.clone();
+    let path = get_git_directory(repo_url);
+    let repo_url = repo_url.to_string();
+    let branch_name = branch_name.to_string();
+    let rep = tokio::task::spawn_blocking(move || -> anyhow::Result<Repository> {
+        let rep: Repository = if path.exists() {
+            println!("Repository exists. Fetching updates...");
+            let repo = Repository::open(&path)?;
+            let mut remote = repo.find_remote("origin")?;
+
+            // Branch for fetching with or without credentials
+            if let Some(c) = creds {
+                println!("Fetching with credentials.");
+                let mut fetch_options = create_auth_options(c);
+                remote.fetch(&[branch_name], Some(&mut fetch_options), None)?;
+            } else {
+                println!("Fetching without credentials.");
+                remote.fetch(&[branch_name], None, None)?;
+            }
+            drop(remote);
+            repo
+        } else {
+            println!("Cloning repository from {}...", &repo_url);
+            // Ensure the parent directory exists before cloning
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            // Use RepoBuilder to allow for custom options
+            let mut builder = RepoBuilder::new();
+
+            // Branch for cloning with or without credentials
+            if let Some(c) = creds.clone() {
+                println!("Cloning with credentials.");
+                let fetch_options = create_auth_options(c);
+                // Configure the builder with our fetch options. This moves the options.
+                builder.fetch_options(fetch_options);
+            } else {
+                println!("Cloning without credentials.");
+            }
+
+            // Perform the clone with the configured builder
+            builder.clone(&repo_url, &path)?
+        };
+        Ok(rep)
+    }).await??;
+
+    Ok(rep)
 }

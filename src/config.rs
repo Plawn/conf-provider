@@ -3,15 +3,21 @@ use std::{collections::HashSet, path::PathBuf, sync::Arc};
 use arc_swap::ArcSwap;
 use dashmap::DashMap;
 
-use crate::{DagEntry, fs::FileProvider, loader::MultiLoader, render::Dag, writer::MultiWriter};
+use crate::{
+    DagEntry,
+    fs::{FileProvider, git::Creds},
+    loader::MultiLoader,
+    render::Dag,
+    writer::MultiWriter,
+};
 
 #[derive(Debug)]
 pub struct RepoConfig {
     pub url: String,
     pub branch: String,
-    pub path: PathBuf,
+    pub creds: Option<Creds>,
 }
-#[derive(Debug)]
+
 pub struct GitAppState<P: FileProvider> {
     pub dag: DashMap<String, DagEntry<P>>,
     pub writer: Arc<MultiWriter>,

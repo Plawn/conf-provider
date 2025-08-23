@@ -2,6 +2,7 @@ use arc_swap::ArcSwap;
 use clap::Parser;
 use dashmap::DashMap;
 
+use konf_provider::fs::git::Creds;
 use konf_provider::main_local::{get_data_local, reload_local};
 use konf_provider::writer::env::EnvVarWriter;
 use konf_provider::writer::properties::PropertiesWriter;
@@ -10,7 +11,7 @@ use konf_provider::{
     config::{GitAppState, LocalAppState, RepoConfig},
     fs::{
         fs::BasicFsFileProvider,
-        git::{list_all_commit_hashes, setup_repository},
+        git::{clone_or_update, list_all_commit_hashes},
     },
     loader::MultiLoader,
     loaders::yaml::YamlLoader,
@@ -35,11 +36,25 @@ enum Args {
         repo_url: String,
         #[arg(long)]
         branch: String,
+
+        #[arg(long)]
+        username: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
     },
     Local {
         #[arg(long)]
         folder: PathBuf,
     },
+}
+
+fn make_git_creds(username: Option<String>, password: Option<String>) -> Option<Creds> {
+    if let Some(u) = username
+        && let Some(p) = password
+    {
+        return Some(Creds::new(u, p));
+    }
+    None
 }
 
 fn main() -> std::io::Result<()> {
@@ -97,17 +112,25 @@ fn main() -> std::io::Result<()> {
                 .run()
                 .wait()
         }
-        Args::Git { repo_url, branch } => {
-            let repo_path =
-                setup_repository(&repo_url, &branch).expect("failed to initialyze repository");
+        Args::Git {
+            repo_url,
+            branch,
+            username,
+            password,
+        } => {
+            let creds = make_git_creds(username, password);
+            let creds_clone = creds.clone();
+            let rt = Runtime::new()?;
+            rt.block_on(clone_or_update(&repo_url, &branch, &creds))
+                .expect("failed to initialyze repository");
 
-            let commits = list_all_commit_hashes(&repo_url, &branch, false).unwrap();
+            let commits = list_all_commit_hashes(&repo_url).unwrap();
 
             let state = Arc::from(GitAppState {
                 repo_config: RepoConfig {
-                    path: repo_path,
                     url: repo_url.to_string(),
                     branch: branch.to_string(),
+                    creds: creds_clone,
                 },
                 dag: DashMap::new(),
                 writer: Arc::from(multiwriter),

@@ -24,4 +24,4 @@ jobs:
         with:
           push: true
           file: Dockerfile
-          tags: plawn/latency-watcher:latest
+          tags: plawn/conf-provider:latest

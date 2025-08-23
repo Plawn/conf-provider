@@ -1,10 +1,11 @@
+use async_once_cell::OnceCell;
 use dashmap::Entry;
 
 use crate::{
     DagEntry,
     authorizer::Authorizer,
     config::GitAppState,
-    fs::git::{GitFileProvider, list_all_commit_hashes},
+    fs::git::{GitFileProvider, clone_or_update, list_all_commit_hashes},
     loader::MultiLoader,
     render::Dag,
     utils::GetError,
@@ -15,15 +16,20 @@ use std::sync::Arc;
 use xitca_web::handler::params::Params;
 use xitca_web::handler::state::StateRef;
 
+use anyhow::Result;
+use tokio::sync::{Mutex};
+
+
+
 pub async fn new_dag_git(
     repo_url: &str,
-    branch_name: &str,
     commit: &str,
     multiloader: Arc<MultiLoader>,
 ) -> Result<DagEntry<GitFileProvider>, GetError> {
-    let fs = GitFileProvider::new(repo_url, branch_name, &commit)
+    let fs = GitFileProvider::new(repo_url, &commit)
         .await
-        .map_err(|_| GetError::CommitNotFound)?; // should never happen, we already checked
+        .map_err(|_| GetError::MissingItem)?; // should never happen, we already checked
+    println!("made git fs: {}", &commit);
     let authorizer = Authorizer::new(&fs, &multiloader).await;
     let d = Dag::new(fs, multiloader)
         .await
@@ -37,35 +43,47 @@ pub async fn get_data_git(
     Params((commit, token, format, path)): Params<(String, String, String, String)>,
     StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
+    println!(
+        "{:?} {} {}",
+        &state.commits.load(),
+        &commit,
+        state.commits.load().contains(&commit)
+    );
     if !state.commits.load().contains(&commit) {
         return Err(GetError::CommitNotFound);
     }
-
     let dag = match state.dag.entry(commit.clone()) {
         Entry::Occupied(entry) => entry.into_ref(),
         Entry::Vacant(entry) => {
-            let d = new_dag_git(
-                &state.repo_config.url,
-                &state.repo_config.branch,
-                &commit,
-                state.multiloader.clone(),
-            )
-            .await?;
+            let d = new_dag_git(&state.repo_config.url, &commit, state.multiloader.clone()).await?;
             entry.insert(d)
         }
     };
 
-    if dag.authorizer.authorize(&path, &token) {
-        let d = dag
-            .dag
-            .get_rendered(&path)
-            .await
-            .map_err(|_| GetError::MissingItem)?;
+    match dag.authorizer.authorize(&path, &token) {
+        true => {
+            let d = dag
+                .dag
+                .get_rendered(&path)
+                .await
+                .map_err(|_| GetError::MissingItem)?;
 
-        state.writer.write(&format, &d).ok_or(GetError::FormatError)
-    } else {
-        Err(GetError::Unauthorized)
+            state.writer.write(&format, &d).ok_or(GetError::FormatError)
+        }
+        false => Err(GetError::Unauthorized),
     }
+}
+
+
+/// We wrap the reload lock in a OnceCell, so it's globally available.
+static RELOAD_CELL: OnceCell<Arc<Mutex<()>>> = OnceCell::new();
+
+/// Ensure the global lock exists.
+async fn reload_lock() -> &'static Arc<Mutex<()>> {
+    let e = RELOAD_CELL
+        .get_or_init(async { Arc::new(Mutex::new(())) })
+        .await;
+    e
 }
 
 /// reload the commit set
@@ -73,8 +91,22 @@ pub async fn reload_git(
     StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
     // TODO: add fetch before list
-    let commits = list_all_commit_hashes(&state.repo_config.url, &state.repo_config.branch, true)
-        .map_err(|_| GetError::FormatError)?;
-    state.commits.store(Arc::from(commits));
+    let lock = reload_lock().await.clone();
+    if let Ok(guard) = lock.try_lock() {
+        clone_or_update(
+            &state.repo_config.url,
+            &state.repo_config.branch,
+            &state.repo_config.creds,
+        )
+        .await
+        .map_err(|_| GetError::Unauthorized)?;
+        let commits =
+            list_all_commit_hashes(&state.repo_config.url).map_err(|_| GetError::FormatError)?;
+        state.commits.store(Arc::from(commits));
+        drop(guard);
+    } else {
+
+    }
+
     Ok("OK".to_string())
 }
