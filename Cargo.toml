@@ -28,6 +28,7 @@ git2 = "0.18"
 sha2 = "0.10"
 hex = "0.4"
 clap = {version = "4.5.45", features = ["derive"]}
+toml = "0.9.5"
 
 
 [profile.release]

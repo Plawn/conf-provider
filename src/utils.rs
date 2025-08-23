@@ -108,6 +108,7 @@ pub enum GetError {
     MissingItem,
     FormatError,
     Unauthorized,
+    Forbiden
 }
 
 impl fmt::Display for GetError {
@@ -143,6 +144,7 @@ impl<'r, C> Service<WebContext<'r, C>> for GetError {
             GetError::MissingItem => StatusCode::NOT_FOUND,
             GetError::FormatError => StatusCode::INTERNAL_SERVER_ERROR,
             GetError::Unauthorized => StatusCode::UNAUTHORIZED,
+            GetError::Forbiden => StatusCode::FORBIDDEN,
         }
         .call(ctx)
         .await

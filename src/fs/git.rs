@@ -44,31 +44,44 @@ pub struct GitFileProvider {
     commit_oid: Oid,
 }
 
+fn get_git_storage_directory() -> PathBuf {
+    std::env::var("GIT_DIR")
+        .ok()
+        .map(|e| e.parse().ok())
+        .flatten()
+        .unwrap_or("._git_storage".parse().unwrap())
+}
+
+pub fn get_git_directory(repo_url: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(repo_url.as_bytes());
+    let cache_dir_name = hex::encode(hasher.finalize());
+    let repo_path = get_git_storage_directory().join(cache_dir_name);
+    repo_path
+}
+
 impl GitFileProvider {
     /// Creates a new GitFileProvider.
     /// This will clone the repository if it's not already cached locally,
     /// or fetch the latest changes if it is.
-    pub async fn new(repo_url: &str, commit_hash: &str) -> Result<Self> {
+    pub async fn new(repo_url: &str, branch_name: &str, commit_hash: &str) -> Result<Self> {
         // 1. Determine a stable cache path from the repository URL.
         // This ensures the same URL always uses the same local directory.
-        let mut hasher = Sha256::new();
-        hasher.update(repo_url.as_bytes());
-        let cache_dir_name = hex::encode(hasher.finalize());
-        let repo_path = std::env::temp_dir()
-            .join("secret_provider_cache")
-            .join(cache_dir_name);
+        let repo_path = get_git_directory(repo_url);
         let repo_url = repo_url.to_string();
         // 2. Clone or fetch the repo. This is a blocking operation.
         let repo_path_clone = repo_path.clone();
+        let branch_name_clone = branch_name.to_string().clone();
         tokio::task::spawn_blocking(move || {
             if repo_path_clone.exists() {
                 // If the repo exists, open it and fetch updates.
                 let repo = Repository::open(&repo_path_clone)?;
-                println!("Repository exists. Fetching updates...");
-                repo.find_remote("origin")?.fetch(&["main"], None, None)?; // Fetches the 'main' branch, adjust if needed
+                println!("Repository exists. Fetching updates..."); // TODO: use logging instead
+                repo.find_remote("origin")?
+                    .fetch(&[branch_name_clone], None, None)?; // Fetches the 'main' branch, adjust if needed
             } else {
                 // If it doesn't exist, clone it.
-                println!("Cloning repository from {}...", repo_url);
+                println!("Cloning repository from {}...", repo_url); // TODO: use logging instead
                 std::fs::create_dir_all(&repo_path_clone.parent().unwrap())?;
                 Repository::clone(&repo_url, &repo_path_clone)?;
             }
@@ -159,11 +172,11 @@ impl FileProvider for GitFileProvider {
 
 /// Walks the Git history and collects all reachable commit hashes.
 pub fn list_all_commit_hashes(
-    repo_path: &Path,
+    repo_url: &str,
     branch_name: &str,
     update: bool,
 ) -> Result<HashSet<String>, Error> {
-    let repo = Repository::open(repo_path)?;
+    let repo = Repository::open(get_git_directory(repo_url))?;
     if update {
         repo.find_remote("origin")?
             .fetch(&[branch_name], None, None)?;
@@ -179,13 +192,7 @@ pub fn list_all_commit_hashes(
 /// Clones or opens a repository in a local cache directory.
 /// Returns the path to the repository.
 pub fn setup_repository(repo_url: &str, branch_name: &str) -> Result<PathBuf> {
-    // Determine a stable cache path from the repository URL
-    let mut hasher = Sha256::new();
-    hasher.update(repo_url.as_bytes());
-    let cache_dir_name = hex::encode(hasher.finalize());
-    let repo_path = std::env::temp_dir()
-        .join("secret_provider_cache")
-        .join(cache_dir_name);
+    let repo_path = get_git_directory(repo_url);
 
     // Clone or fetch the repo. This is a blocking operation.
     let repo_path_clone = repo_path.clone();

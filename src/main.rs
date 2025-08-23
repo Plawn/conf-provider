@@ -5,6 +5,7 @@ use dashmap::DashMap;
 use konf_provider::main_local::{get_data_local, reload_local};
 use konf_provider::writer::env::EnvVarWriter;
 use konf_provider::writer::properties::PropertiesWriter;
+use konf_provider::writer::toml::TomlWriter;
 use konf_provider::{
     config::{GitAppState, LocalAppState, RepoConfig},
     fs::{
@@ -52,6 +53,7 @@ fn main() -> std::io::Result<()> {
         JsonWriter::new_boxed(),
         EnvVarWriter::new_boxed(),
         PropertiesWriter::new_boxed(),
+        TomlWriter::new_boxed(),
     ]);
 
     match args {
@@ -87,9 +89,9 @@ fn main() -> std::io::Result<()> {
                 .wait()
         }
         Args::Git { repo_url, branch } => {
-            let repo_path = setup_repository(&repo_url, &branch).unwrap();
+            let repo_path = setup_repository(&repo_url, &branch).expect("failed to initialyze repository");
 
-            let commits = list_all_commit_hashes(&repo_path, &branch, false).unwrap();
+            let commits = list_all_commit_hashes(&repo_url, &branch, false).unwrap();
 
             let state = Arc::from(GitAppState {
                 repo_config: RepoConfig {
@@ -108,7 +110,7 @@ fn main() -> std::io::Result<()> {
                 .at("/live", get(handler_service(async || "OK")))
                 .at("/reload", get(handler_service(reload_git)))
                 .at(
-                    "/data/:commit/:format/:token/*rest",
+                    "/data/:commit/:token/:format/*rest",
                     get(handler_service(get_data_git)),
                 )
                 .enclosed_fn(utils::error_handler)
