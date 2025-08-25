@@ -3,9 +3,9 @@ import:
   - b
 
 value:
-  l: '#ref:a.value'
+  l: ${a.value}
   b: 
-    - name: '#ref:b.pm'
+    - name: ${b.pm}
 
 
-zed: '#ref:b.pm'
+zed: http://${b.pm}/dev

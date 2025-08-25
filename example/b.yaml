@@ -5,4 +5,4 @@ import:
 
 plem: dez
 
-pm: '#ref:a.value'
+pm: ${a.value} ${a.value}
