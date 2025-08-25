@@ -19,7 +19,7 @@ use xitca_web::{handler::params::Params, http::HeaderMap};
 use anyhow::Result;
 use tokio::sync::Mutex;
 
-pub async fn new_dag_git(
+async fn new_dag_git(
     repo_url: &str,
     commit: &str,
     multiloader: Arc<MultiLoader>,
@@ -34,9 +34,7 @@ pub async fn new_dag_git(
     Ok(DagEntry { dag: d, authorizer })
 }
 
-// fix proper token sourcing
-// -> should be in headers
-pub async fn get_data_git(
+pub async fn get_data(
     headers: HeaderMap,
     Params((commit, format, path)): Params<(String, String, String)>,
     StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
@@ -46,11 +44,11 @@ pub async fn get_data_git(
         .ok_or(GetError::Unauthorized)?
         .to_str()
         .map_err(|_| GetError::FormatError)?;
-    
+
     if !state.commits.load().contains(&commit) {
         return Err(GetError::CommitNotFound);
     }
-    
+
     let dag = match state.dag.entry(commit.clone()) {
         Entry::Occupied(entry) => entry.into_ref(),
         Entry::Vacant(entry) => {
@@ -85,7 +83,7 @@ async fn reload_lock() -> &'static Arc<Mutex<()>> {
 }
 
 /// reload the commit set
-pub async fn reload_git(
+pub async fn reload(
     StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
     // TODO: add fetch before list

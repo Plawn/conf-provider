@@ -3,7 +3,7 @@ use clap::Parser;
 use dashmap::DashMap;
 
 use konf_provider::fs::git::Creds;
-use konf_provider::main_local::{get_data_local, reload_local};
+use konf_provider::local_routes;
 use konf_provider::writer::env::EnvVarWriter;
 use konf_provider::writer::properties::PropertiesWriter;
 use konf_provider::writer::toml::TomlWriter;
@@ -13,9 +13,9 @@ use konf_provider::{
         fs::BasicFsFileProvider,
         git::{clone_or_update, list_all_commit_hashes},
     },
+    git_routes,
     loader::MultiLoader,
     loaders::yaml::YamlLoader,
-    main_git::{get_data_git, reload_git},
     render::Dag,
     utils::{self},
     writer::{MultiWriter, json::JsonWriter, yaml::YamlWriter},
@@ -103,8 +103,11 @@ fn main() -> std::io::Result<()> {
             App::new()
                 .with_state(state)
                 .at("/live", get(handler_service(async || "OK")))
-                .at("/reload", get(handler_service(reload_local)))
-                .at("/data/:format/*rest", get(handler_service(get_data_local)))
+                .at("/reload", get(handler_service(local_routes::reload)))
+                .at(
+                    "/data/:format/*rest",
+                    get(handler_service(local_routes::get_data)),
+                )
                 .enclosed_fn(utils::error_handler)
                 .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
                 .serve()
@@ -141,10 +144,10 @@ fn main() -> std::io::Result<()> {
             App::new()
                 .with_state(state)
                 .at("/live", get(handler_service(async || "OK")))
-                .at("/reload", get(handler_service(reload_git)))
+                .at("/reload", get(handler_service(git_routes::reload)))
                 .at(
                     "/data/:commit/:format/*rest",
-                    get(handler_service(get_data_git)),
+                    get(handler_service(git_routes::get_data)),
                 )
                 .enclosed_fn(utils::error_handler)
                 .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))

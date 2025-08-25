@@ -4,7 +4,7 @@ use crate::{config::LocalAppState, utils::GetError};
 use xitca_web::handler::params::Params;
 use xitca_web::handler::state::StateRef;
 
-pub async fn get_data_local(
+pub async fn get_data(
     Params((format, path)): Params<(String, String)>,
     StateRef(state): StateRef<'_, LocalAppState<BasicFsFileProvider>>,
 ) -> Result<String, GetError> {
@@ -16,7 +16,7 @@ pub async fn get_data_local(
     state.writer.write(&format, &d).ok_or(GetError::FormatError)
 }
 
-pub async fn reload_local(
+pub async fn reload(
     StateRef(state): StateRef<'_, LocalAppState<BasicFsFileProvider>>,
 ) -> Result<String, GetError> {
     state.dag.reload().await.expect("failed to reload");

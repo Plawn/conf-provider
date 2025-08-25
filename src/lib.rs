@@ -16,8 +16,8 @@ pub mod fs;
 pub mod render_helper;
 pub mod render;
 pub mod authorizer;
-pub mod main_git;
-pub mod main_local;
+pub mod git_routes;
+pub mod local_routes;
 pub mod config;
 #[derive(Debug)]
 pub struct Konf {
