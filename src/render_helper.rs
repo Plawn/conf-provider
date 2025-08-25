@@ -50,12 +50,11 @@ pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) 
             // Case 1: The entire string is a single placeholder, like "${a.b.c}".
             // In this case, we replace the string with the referenced value, preserving its type.
             if let Some(caps) = EXACT_MATCH_RE.captures(s) {
-                if let Some(path) = caps.name("path") {
-                    if let Some(replacement) = lookup_in_deps(path.as_str(), deps) {
+                if let Some(path) = caps.name("path")
+                    && let Some(replacement) = lookup_in_deps(path.as_str(), deps) {
                         *value = replacement.clone();
                     }
                     // Optional: Log a warning if the reference is not found.
-                }
                 return; // Stop processing to avoid falling through to interpolation logic.
             }
 

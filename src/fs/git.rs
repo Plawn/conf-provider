@@ -48,8 +48,7 @@ pub struct GitFileProvider {
 fn get_git_storage_directory() -> PathBuf {
     std::env::var("GIT_DIR")
         .ok()
-        .map(|e| e.parse().ok())
-        .flatten()
+        .and_then(|e| e.parse().ok())
         .unwrap_or("._git_storage".parse().unwrap())
 }
 
@@ -57,8 +56,8 @@ pub fn get_git_directory(repo_url: &str) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(repo_url.as_bytes());
     let cache_dir_name = hex::encode(hasher.finalize());
-    let repo_path = get_git_storage_directory().join(cache_dir_name);
-    repo_path
+    
+    get_git_storage_directory().join(cache_dir_name)
 }
 
 impl GitFileProvider {
@@ -75,7 +74,7 @@ impl GitFileProvider {
             if repo_path_clone.exists() {
                 // If the repo exists, open it and fetch updates.
                 let repo = Repository::open(&repo_path_clone)?;
-                return Ok(repo);
+                Ok(repo)
             } else {
                 Err(anyhow!("repo should have been init already"))
             }
@@ -144,14 +143,13 @@ impl FileProvider for GitFileProvider {
             // Walk the tree of files recursively
             let _ = tree.walk(git2::TreeWalkMode::PostOrder, |root, entry| {
                 // We only care about files (blobs), not directories
-                if entry.kind() == Some(git2::ObjectType::Blob) {
-                    if let Some(filename) = entry.name() {
+                if entry.kind() == Some(git2::ObjectType::Blob)
+                    && let Some(filename) = entry.name() {
                         let full_path = Path::new(root).join(filename);
                         if let Ok(dir_entry) = DirEntry::try_from(full_path.as_path()) {
                             entries.push(dir_entry);
                         }
                     }
-                }
                 git2::TreeWalkResult::Ok
             });
 

@@ -43,13 +43,13 @@ impl BasicFsFileProvider {
 
 impl FileProvider for BasicFsFileProvider {
     async fn load(&self, path: &str) -> Option<String> {
-        let content = tokio::fs::read_to_string(path).await.ok();
-        content
+        
+        tokio::fs::read_to_string(path).await.ok()
     }
 
     async fn list(&self) -> Vec<DirEntry> {
         let mut entries = Vec::new();
-        if let Some(mut dir) = tokio::fs::read_dir(&self.folder).await.ok() {
+        if let Ok(mut dir) = tokio::fs::read_dir(&self.folder).await {
             while let Ok(Some(entry)) = dir.next_entry().await {
                 if let Ok(e) = entry.try_into() {
                     entries.push(e);

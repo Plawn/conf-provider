@@ -24,7 +24,7 @@ async fn new_dag_git(
     commit: &str,
     multiloader: Arc<MultiLoader>,
 ) -> Result<DagEntry<GitFileProvider>, GetError> {
-    let fs = GitFileProvider::new(repo_url, &commit)
+    let fs = GitFileProvider::new(repo_url, commit)
         .await
         .map_err(|_| GetError::Unknown)?; // should never happen, we already checked
     let authorizer = Authorizer::new(&fs, &multiloader).await;
@@ -57,7 +57,7 @@ pub async fn get_data(
         }
     };
 
-    match dag.authorizer.authorize(&path, &token) {
+    match dag.authorizer.authorize(&path, token) {
         true => {
             let d = dag
                 .dag
@@ -76,10 +76,10 @@ static RELOAD_CELL: OnceCell<Arc<Mutex<()>>> = OnceCell::new();
 
 /// Ensure the global lock exists.
 async fn reload_lock() -> &'static Arc<Mutex<()>> {
-    let e = RELOAD_CELL
+    
+    (RELOAD_CELL
         .get_or_init(async { Arc::new(Mutex::new(())) })
-        .await;
-    e
+        .await) as _
 }
 
 /// reload the commit set
@@ -100,8 +100,7 @@ pub async fn reload(
             list_all_commit_hashes(&state.repo_config.url).map_err(|_| GetError::FormatError)?;
         state.commits.store(Arc::from(commits));
         drop(guard);
-    } else {
-    }
+    } 
 
     Ok("OK".to_string())
 }
