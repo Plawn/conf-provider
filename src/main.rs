@@ -10,7 +10,7 @@ use konf_provider::writer::toml::TomlWriter;
 use konf_provider::{
     config::{GitAppState, LocalAppState, RepoConfig},
     fs::{
-        fs::BasicFsFileProvider,
+        local::BasicFsFileProvider,
         git::{clone_or_update, list_all_commit_hashes},
     },
     git_routes,

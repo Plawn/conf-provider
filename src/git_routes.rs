@@ -43,7 +43,7 @@ pub async fn get_data(
         .get("token")
         .ok_or(GetError::Unauthorized)?
         .to_str()
-        .map_err(|_| GetError::FormatError)?;
+        .map_err(|_| GetError::BadRequest)?;
 
     if !state.commits.load().contains(&commit) {
         return Err(GetError::CommitNotFound);
@@ -65,7 +65,7 @@ pub async fn get_data(
                 .await
                 .map_err(|_| GetError::MissingItem)?;
 
-            state.writer.write(&format, &d).ok_or(GetError::FormatError)
+            state.writer.write(&format, &d).ok_or(GetError::BadRequest)
         }
         false => Err(GetError::Unauthorized),
     }
@@ -97,7 +97,7 @@ pub async fn reload(
         .await
         .map_err(|_| GetError::Unauthorized)?;
         let commits =
-            list_all_commit_hashes(&state.repo_config.url).map_err(|_| GetError::FormatError)?;
+            list_all_commit_hashes(&state.repo_config.url).map_err(|_| GetError::Unknown)?;
         state.commits.store(Arc::from(commits));
         drop(guard);
     } 
