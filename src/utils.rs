@@ -106,6 +106,7 @@ where
 pub enum GetError {
     CommitNotFound,
     MissingItem,
+    Unknown,
     FormatError,
     Unauthorized,
     Forbiden
@@ -143,6 +144,7 @@ impl<'r, C> Service<WebContext<'r, C>> for GetError {
             GetError::CommitNotFound => StatusCode::NOT_FOUND,
             GetError::MissingItem => StatusCode::NOT_FOUND,
             GetError::FormatError => StatusCode::INTERNAL_SERVER_ERROR,
+            GetError::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
             GetError::Unauthorized => StatusCode::UNAUTHORIZED,
             GetError::Forbiden => StatusCode::FORBIDDEN,
         }

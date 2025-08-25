@@ -143,7 +143,7 @@ fn main() -> std::io::Result<()> {
                 .at("/live", get(handler_service(async || "OK")))
                 .at("/reload", get(handler_service(reload_git)))
                 .at(
-                    "/data/:commit/:token/:format/*rest",
+                    "/data/:commit/:format/*rest",
                     get(handler_service(get_data_git)),
                 )
                 .enclosed_fn(utils::error_handler)

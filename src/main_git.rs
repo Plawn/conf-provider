@@ -13,13 +13,11 @@ use crate::{
 
 use std::sync::Arc;
 
-use xitca_web::handler::params::Params;
 use xitca_web::handler::state::StateRef;
+use xitca_web::{handler::params::Params, http::HeaderMap};
 
 use anyhow::Result;
-use tokio::sync::{Mutex};
-
-
+use tokio::sync::Mutex;
 
 pub async fn new_dag_git(
     repo_url: &str,
@@ -28,30 +26,31 @@ pub async fn new_dag_git(
 ) -> Result<DagEntry<GitFileProvider>, GetError> {
     let fs = GitFileProvider::new(repo_url, &commit)
         .await
-        .map_err(|_| GetError::MissingItem)?; // should never happen, we already checked
-    println!("made git fs: {}", &commit);
+        .map_err(|_| GetError::Unknown)?; // should never happen, we already checked
     let authorizer = Authorizer::new(&fs, &multiloader).await;
     let d = Dag::new(fs, multiloader)
         .await
-        .map_err(|_| GetError::MissingItem)?;
+        .map_err(|_| GetError::Unknown)?;
     Ok(DagEntry { dag: d, authorizer })
 }
 
 // fix proper token sourcing
 // -> should be in headers
 pub async fn get_data_git(
-    Params((commit, token, format, path)): Params<(String, String, String, String)>,
+    headers: HeaderMap,
+    Params((commit, format, path)): Params<(String, String, String)>,
     StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
-    println!(
-        "{:?} {} {}",
-        &state.commits.load(),
-        &commit,
-        state.commits.load().contains(&commit)
-    );
+    let token = headers
+        .get("token")
+        .ok_or(GetError::Unauthorized)?
+        .to_str()
+        .map_err(|_| GetError::FormatError)?;
+    
     if !state.commits.load().contains(&commit) {
         return Err(GetError::CommitNotFound);
     }
+    
     let dag = match state.dag.entry(commit.clone()) {
         Entry::Occupied(entry) => entry.into_ref(),
         Entry::Vacant(entry) => {
@@ -73,7 +72,6 @@ pub async fn get_data_git(
         false => Err(GetError::Unauthorized),
     }
 }
-
 
 /// We wrap the reload lock in a OnceCell, so it's globally available.
 static RELOAD_CELL: OnceCell<Arc<Mutex<()>>> = OnceCell::new();
@@ -105,7 +103,6 @@ pub async fn reload_git(
         state.commits.store(Arc::from(commits));
         drop(guard);
     } else {
-
     }
 
     Ok("OK".to_string())
