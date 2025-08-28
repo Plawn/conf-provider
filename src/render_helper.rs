@@ -51,10 +51,11 @@ pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) 
             // In this case, we replace the string with the referenced value, preserving its type.
             if let Some(caps) = EXACT_MATCH_RE.captures(s) {
                 if let Some(path) = caps.name("path")
-                    && let Some(replacement) = lookup_in_deps(path.as_str(), deps) {
-                        *value = replacement.clone();
-                    }
-                    // Optional: Log a warning if the reference is not found.
+                    && let Some(replacement) = lookup_in_deps(path.as_str(), deps)
+                {
+                    *value = replacement.clone();
+                }
+                // Optional: Log a warning if the reference is not found.
                 return; // Stop processing to avoid falling through to interpolation logic.
             }
 
@@ -90,17 +91,4 @@ pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) 
         // Other types (Number, Bool, Null) don't have refs, so we do nothing.
         _ => {}
     }
-}
-
-pub fn get_imports(value: &Value) -> Vec<String> {
-    const IMPORT_KEY: &str = "import";
-    value
-        .get(IMPORT_KEY)
-        .and_then(|e| e.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|e| e.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default()
 }

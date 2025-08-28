@@ -1,0 +1,12 @@
+
+services:
+  app:
+    image: plawn/conf-provider
+    restart: unless-stopped
+    env_file: prod.env
+    ports:
+      - 4000:4000
+
+networks:
+  traefik-network:
+    external : true

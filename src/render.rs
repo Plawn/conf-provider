@@ -4,15 +4,18 @@ use std::{collections::HashMap, sync::Arc};
 use arc_swap::ArcSwap;
 use futures::future;
 
-use crate::{fs::FileProvider, loader::{LoaderError, MultiLoader}, render_helper::{get_imports, resolve_refs_from_deps}, DagFiles, Konf, Value};
-
+use crate::{
+    DagFiles, Konf, Value,
+    fs::FileProvider,
+    loader::{LoaderError, MultiLoader},
+    render_helper::resolve_refs_from_deps,
+    utils::get_conf_strings,
+};
 
 #[derive(Debug, Clone)]
 pub enum RenderError {
     All,
 }
-
-
 
 #[derive(Debug)]
 pub struct DagInner<P: FileProvider> {
@@ -28,8 +31,6 @@ pub struct DagInner<P: FileProvider> {
 pub struct Dag<P: FileProvider> {
     inner: Arc<DagInner<P>>,
 }
-
-
 
 impl<P: FileProvider> Dag<P> {
     // new() now initializes the ArcSwap with the first load
@@ -48,7 +49,7 @@ impl<P: FileProvider> Dag<P> {
         let konf = files_snapshot
             .get(file_path)
             .ok_or_else(|| anyhow!("File not found: {}", file_path))?;
-
+        const IMPORT_KEY: &str = "import";
         // This `get_or_try_init` takes a Future, and the whole expression is await-able.
         // This now correctly matches what the compiler expects.
         let rendered_value = konf
@@ -56,7 +57,7 @@ impl<P: FileProvider> Dag<P> {
             .get_or_try_init(async {
                 // The async block is now valid
                 let raw_value = konf.raw.clone();
-                let imports = get_imports(&raw_value);
+                let imports = get_conf_strings(&raw_value, IMPORT_KEY);
 
                 let dep_futures = imports.iter().map(|key| self.get_rendered(key));
 
@@ -67,7 +68,7 @@ impl<P: FileProvider> Dag<P> {
                 resolve_refs_from_deps(&mut value_to_render, &deps_map);
 
                 if let Value::Mapping(ref mut m) = value_to_render {
-                    m.remove("auth");
+                    m.remove("<!>");
                 };
 
                 // The future must resolve to a Result<Value, E>
@@ -103,4 +104,3 @@ impl<P: FileProvider> Dag<P> {
             .ok_or(RenderError::All)
     }
 }
-

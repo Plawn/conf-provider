@@ -8,6 +8,8 @@ use xitca_web::{
     service::Service,
 };
 
+use crate::Value;
+
 // a custom error type. must implement following traits:
 // std::fmt::{Debug, Display} for formatting
 // std::error::Error for backtrace and type casting
@@ -151,4 +153,21 @@ impl<'r, C> Service<WebContext<'r, C>> for GetError {
         .call(ctx)
         .await
     }
+}
+
+
+pub fn get_conf_strings(value: &Value, key: &str) -> Vec<String> {
+    const MAIN_KEY: &str = "<!>";
+    value
+        .get(MAIN_KEY)
+        .and_then(|main_value| main_value.as_mapping())
+        .and_then(|main_map| main_map.get(key))
+        .and_then(|import_value| import_value.as_sequence())
+        .map(|import_sequence| {
+            import_sequence
+                .iter()
+                .filter_map(|item| item.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }

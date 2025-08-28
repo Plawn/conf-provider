@@ -9,3 +9,6 @@ value:
 
 
 zed: http://${b.pm}/dev
+
+
+prem: ${b.one}

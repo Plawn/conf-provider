@@ -44,13 +44,14 @@ pub struct DagEntry<P: FileProvider> {
 pub enum Value {
     String(String),
     Sequence(Sequence),
-    Mapping(HashMap<String, Value>),
+    Mapping(Mapping),
     Number(f64),
     Boolean(bool),
     Null,
 }
 
 pub type Sequence = Vec<Value>;
+pub type Mapping = HashMap<String, Value>;
 
 impl Value {
     pub fn get(&self, key: &str) -> Option<&Value> {
@@ -66,6 +67,14 @@ impl Value {
             _ => None,
         }
     }
+
+     pub fn as_mapping(&self) -> Option<&Mapping> {
+        match self {
+            Value::Mapping(values) => Some(values),
+            _ => None,
+        }
+    }
+
 
     pub fn as_str(&self) -> Option<&String> {
         match self {

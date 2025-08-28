@@ -1,8 +1,16 @@
-import:
-  - a
+
+<!>:
+  import:
+    - a
 
 
 
 plem: dez
 
 pm: ${a.value} ${a.value}
+
+one:
+  two:
+    three:
+      - a
+      - nested: ${a.value}
