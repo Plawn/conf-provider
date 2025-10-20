@@ -86,8 +86,15 @@ impl<P: FileProvider> Dag<P> {
 
         for path in paths {
             if let Some(content) = self.inner.file_provider.load(&path.full_path).await {
-                let k = Konf::new(self.inner.multiloader.load(&path.ext, &content)?);
-                files.insert(path.filename, k);
+                match self.inner.multiloader.load(&path.ext, &content) {
+                    Ok(l) => {
+                        let k = Konf::new(l);
+                        files.insert(path.filename, k);
+                    }
+                    Err(_) => {
+                        eprintln!("failed to load {:?}", &path)
+                    }
+                }
             }
         }
         // Atomically publish the new HashMap

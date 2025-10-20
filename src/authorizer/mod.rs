@@ -36,7 +36,9 @@ impl Authorizer {
                             }
                         }
                     }
-                    Err(_) => todo!(),
+                    Err(e) => {
+                        eprintln!("failed to read {:?}", &path);
+                    }
                 }
             }
         }

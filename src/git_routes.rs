@@ -26,11 +26,11 @@ async fn new_dag_git(
 ) -> Result<DagEntry<GitFileProvider>, GetError> {
     let fs = GitFileProvider::new(repo_url, commit)
         .await
-        .map_err(|_| GetError::Unknown)?; // should never happen, we already checked
+        .map_err(|_| GetError::CommitNotFound)?; // should never happen, we already checked
     let authorizer = Authorizer::new(&fs, &multiloader).await;
     let d = Dag::new(fs, multiloader)
         .await
-        .map_err(|_| GetError::Unknown)?;
+        .map_err(|_| GetError::MissingItem)?;
     Ok(DagEntry { dag: d, authorizer })
 }
 
