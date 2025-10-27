@@ -3,7 +3,7 @@ pub mod json;
 pub mod properties;
 pub mod toml;
 pub mod yaml;
-
+pub mod docker_env;
 use std::fmt::Debug;
 
 use crate::Value;

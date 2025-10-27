@@ -4,6 +4,7 @@ use dashmap::DashMap;
 
 use konf_provider::fs::git::Creds;
 use konf_provider::local_routes;
+use konf_provider::writer::docker_env::DockerEnvVarWriter;
 use konf_provider::writer::env::EnvVarWriter;
 use konf_provider::writer::properties::PropertiesWriter;
 use konf_provider::writer::toml::TomlWriter;
@@ -78,6 +79,7 @@ fn main() -> std::io::Result<()> {
         EnvVarWriter::new_boxed(),
         PropertiesWriter::new_boxed(),
         TomlWriter::new_boxed(),
+        DockerEnvVarWriter::new_boxed(),
     ]);
 
     match args {
