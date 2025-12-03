@@ -1,4 +1,4 @@
-use crate::{Value, writer::ValueWriter};
+use crate::{Value, writer::{ValueWriter, WriterError}};
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
@@ -9,17 +9,21 @@ impl ValueWriter for TomlWriter {
         "toml"
     }
 
-    fn to_str(&self, v: &Value) -> String {
+    fn to_str(&self, v: &Value) -> Result<String, WriterError> {
         const ROOT_KEY: &str = "root";
         let toml_value = to_toml(v);
+        let map_err = |e: toml::ser::Error| WriterError {
+            format: "toml",
+            message: e.to_string(),
+        };
         // The toml crate expects a top-level table for serialization.
         // If our value is not a mapping, we'll wrap it in a table with a default key.
         if let toml::Value::Table(table) = toml_value {
-            toml::to_string_pretty(&table).unwrap()
+            toml::to_string_pretty(&table).map_err(map_err)
         } else {
             let mut table = BTreeMap::new();
             table.insert(ROOT_KEY, toml_value);
-            toml::to_string_pretty(&table).unwrap()
+            toml::to_string_pretty(&table).map_err(map_err)
         }
     }
 }

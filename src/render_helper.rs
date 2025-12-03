@@ -1,15 +1,21 @@
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::Value;
 
-use lazy_static::lazy_static;
 use regex::{Captures, Regex};
 
-lazy_static! {
-    /// Regex for an exact match, e.g., "${a.b.c}"
-    static ref EXACT_MATCH_RE: Regex = Regex::new(r"^\$\{(?P<path>[^}]+)\}$").unwrap();
-    /// Regex for finding all occurrences, e.g., in "http://${host}/${path}"
-    static ref INTERPOLATION_RE: Regex = Regex::new(r"\$\{(?P<path>[^}]+)\}").unwrap();
+/// Regex for an exact match, e.g., "${a.b.c}"
+static EXACT_MATCH_RE: OnceLock<Regex> = OnceLock::new();
+/// Regex for finding all occurrences, e.g., in "http://${host}/${path}"
+static INTERPOLATION_RE: OnceLock<Regex> = OnceLock::new();
+
+fn exact_match_re() -> &'static Regex {
+    EXACT_MATCH_RE.get_or_init(|| Regex::new(r"^\$\{(?P<path>[^}]+)\}$").expect("invalid regex"))
+}
+
+fn interpolation_re() -> &'static Regex {
+    INTERPOLATION_RE.get_or_init(|| Regex::new(r"\$\{(?P<path>[^}]+)\}").expect("invalid regex"))
 }
 
 /// Helper to look up a dotted path (e.g., "dependency_file.some.nested.key")
@@ -32,13 +38,17 @@ fn lookup_in_deps<'a>(path: &str, deps: &'a HashMap<String, Value>) -> Option<&'
     Some(current)
 }
 
-/// Helper to stringify a `serde_yaml::Value` for interpolation.
+/// Helper to stringify a `Value` for interpolation.
 /// Complex types like Mappings and Sequences return None as they can't be
 /// meaningfully embedded in a string.
 fn value_to_string(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
-        _ => None,
+        Value::Number(n) => Some(n.to_string()),
+        Value::Boolean(b) => Some(b.to_string()),
+        Value::Null => Some("null".to_string()),
+        // Sequences and Mappings can't be meaningfully embedded in a string
+        Value::Sequence(_) | Value::Mapping(_) => None,
     }
 }
 
@@ -49,7 +59,7 @@ pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) 
         Value::String(s) => {
             // Case 1: The entire string is a single placeholder, like "${a.b.c}".
             // In this case, we replace the string with the referenced value, preserving its type.
-            if let Some(caps) = EXACT_MATCH_RE.captures(s) {
+            if let Some(caps) = exact_match_re().captures(s) {
                 if let Some(path) = caps.name("path")
                     && let Some(replacement) = lookup_in_deps(path.as_str(), deps)
                 {
@@ -62,7 +72,7 @@ pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) 
             // Case 2: The string contains one or more placeholders for interpolation,
             // like "http://${server.host}:${server.port}/path".
             // The result will always be a new string.
-            let new_s = INTERPOLATION_RE.replace_all(s, |caps: &Captures| {
+            let new_s = interpolation_re().replace_all(s, |caps: &Captures| {
                 // Get the path from the "path" capture group.
                 caps.name("path")
                     .and_then(|path| lookup_in_deps(path.as_str(), deps)) // Look up the value.

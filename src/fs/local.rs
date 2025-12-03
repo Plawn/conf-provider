@@ -1,34 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::fs::{DirEntry, FileProvider};
-
-
-
-impl TryFrom<tokio::fs::DirEntry> for DirEntry {
-    type Error = std::io::Error;
-
-    fn try_from(entry: tokio::fs::DirEntry) -> Result<Self, Self::Error> {
-        let path = entry.path();
-        let filename = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid filename")
-            })?
-            .to_string();
-        let full_path = path.to_string_lossy().into_owned();
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        Ok(DirEntry {
-            filename,
-            full_path,
-            ext,
-        })
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct BasicFsFileProvider {
@@ -39,24 +11,44 @@ impl BasicFsFileProvider {
     pub fn new(folder: PathBuf) -> Self {
         Self { folder }
     }
+
+    /// Recursively lists all files in a directory.
+    async fn list_recursive(
+        base: &Path,
+        current: &Path,
+        entries: &mut Vec<DirEntry>,
+    ) {
+        let Ok(mut dir) = tokio::fs::read_dir(current).await else {
+            return;
+        };
+
+        while let Ok(Some(entry)) = dir.next_entry().await {
+            let path = entry.path();
+
+            if path.is_dir() {
+                // Recursively process subdirectories
+                Box::pin(Self::list_recursive(base, &path, entries)).await;
+            } else if path.is_file() {
+                // Calculate relative path from base folder
+                if let Ok(relative) = path.strip_prefix(base) {
+                    let full_path = path.to_string_lossy().into_owned();
+                    if let Some(dir_entry) = DirEntry::from_relative_path(relative, &full_path) {
+                        entries.push(dir_entry);
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl FileProvider for BasicFsFileProvider {
     async fn load(&self, path: &str) -> Option<String> {
-        
         tokio::fs::read_to_string(path).await.ok()
     }
 
     async fn list(&self) -> Vec<DirEntry> {
         let mut entries = Vec::new();
-        if let Ok(mut dir) = tokio::fs::read_dir(&self.folder).await {
-            while let Ok(Some(entry)) = dir.next_entry().await {
-                if let Ok(e) = entry.try_into() {
-                    entries.push(e);
-                }
-                // could do a warning
-            }
-        }
+        Self::list_recursive(&self.folder, &self.folder, &mut entries).await;
         entries
     }
 }

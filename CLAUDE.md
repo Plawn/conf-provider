@@ -1,0 +1,71 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Build & Run Commands
+
+```bash
+# Build the project (requires nightly Rust for edition 2024)
+cargo +nightly build
+
+# Build release
+cargo +nightly build --release
+
+# Run linter
+cargo +nightly clippy
+
+# Run the server in local mode (serves config from filesystem)
+cargo +nightly run --bin server -- local --folder /path/to/configs [--port 4000]
+
+# Run the server in git mode (serves config from git repository)
+cargo +nightly run --bin server -- git --repo-url <url> --branch <branch> [--username <user> --password <pass>] [--port 4000]
+
+# Port can also be set via environment variable
+KONF_PORT=8080 cargo +nightly run --bin server -- local --folder /path/to/configs
+
+# Build the cache helper binary
+cargo +nightly build --bin cache
+```
+
+## Architecture
+
+konf-provider is a configuration server that serves YAML configuration files with templating support. It can source configs from a local filesystem or a git repository, and output in multiple formats (yaml, json, env, properties, toml, docker_env).
+
+### Core Data Flow
+
+1. **FileProvider** (`src/fs/`) - Abstracts file loading from local filesystem (`local.rs`) or git repository (`git.rs`)
+2. **Loader** (`src/loader.rs`, `src/loaders/`) - Parses files into internal `Value` type (currently only YAML supported)
+3. **Dag** (`src/render.rs`) - Stores loaded configs and handles rendering with dependency resolution
+4. **ValueWriter** (`src/writer/`) - Serializes `Value` to output formats
+
+### Key Types
+
+- `Value` (`src/lib.rs`) - Internal representation of config data (String, Sequence, Mapping, Number, Boolean, Null)
+- `Dag<P: FileProvider>` - Holds config files and renders them with template resolution. Uses `ArcSwap` for atomic reloads
+- `MultiLoader` / `MultiWriter` - Dispatch to appropriate loader/writer based on file extension
+
+### Templating System
+
+Config files support a `<!>` metadata section with:
+- `import`: list of other config files to import
+- `auth`: list of tokens that can access this config (git mode only)
+
+Template syntax uses `${path.to.value}` to reference values from imported files. See `src/render_helper.rs` for resolution logic.
+
+### HTTP Endpoints
+
+- `/live` - Health check
+- `/metrics` - Prometheus metrics endpoint
+- `/reload` - Reload configs from source
+- `/data/:format/*path` (local mode) - Get rendered config
+- `/data/:commit/:format/*path` (git mode) - Get rendered config at specific commit (requires `token` header for auth)
+
+### Observability
+
+- **Metrics** (`src/metrics.rs`) - Prometheus metrics using `metrics` crate (http requests, config renders, reloads, git cache)
+- **Telemetry** (`src/telemetry.rs`) - OpenTelemetry tracing setup with optional OTLP export (set `OTEL_EXPORTER_OTLP_ENDPOINT`)
+
+### Server Modes
+
+- **Local mode** (`LocalAppState`) - Simple filesystem-based serving with hot reload
+- **Git mode** (`GitAppState`) - Serves configs from git repo, caches DAGs per commit in `DashMap`, uses `Authorizer` for token-based access control

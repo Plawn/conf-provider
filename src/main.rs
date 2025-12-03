@@ -4,6 +4,8 @@ use dashmap::DashMap;
 
 use konf_provider::fs::git::Creds;
 use konf_provider::local_routes;
+use konf_provider::metrics::init_metrics;
+use konf_provider::telemetry::{init_tracing, TelemetryConfig};
 use konf_provider::writer::docker_env::DockerEnvVarWriter;
 use konf_provider::writer::env::EnvVarWriter;
 use konf_provider::writer::properties::PropertiesWriter;
@@ -25,7 +27,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::runtime::Runtime;
 use tower_http::trace::TraceLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use xitca_web::middleware::tower_http_compat::TowerHttpCompat;
 use xitca_web::{App, handler::handler_service, route::get};
 
@@ -42,10 +43,18 @@ enum Args {
         username: Option<String>,
         #[arg(long)]
         password: Option<String>,
+
+        /// Port to listen on
+        #[arg(long, short, default_value = "4000", env = "KONF_PORT")]
+        port: u16,
     },
     Local {
         #[arg(long)]
         folder: PathBuf,
+
+        /// Port to listen on
+        #[arg(long, short, default_value = "4000", env = "KONF_PORT")]
+        port: u16,
     },
 }
 
@@ -58,19 +67,13 @@ fn make_git_creds(username: Option<String>, password: Option<String>) -> Option<
     None
 }
 
+
 fn main() -> std::io::Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!(
-                    "{}=debug,tower_http=debug,axum::rejection=trace",
-                    env!("CARGO_CRATE_NAME")
-                )
-                .into()
-            }),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    // Initialize tracing with optional OpenTelemetry export
+    let _tracer_provider = init_tracing(TelemetryConfig::default());
+
+    // Initialize Prometheus metrics
+    let prometheus_handle = Arc::new(init_metrics());
 
     let args = Args::parse();
     let multiwriter = MultiWriter::new(vec![
@@ -83,7 +86,7 @@ fn main() -> std::io::Result<()> {
     ]);
 
     match args {
-        Args::Local { folder } => {
+        Args::Local { folder, port } => {
             let multiloader = Arc::from(MultiLoader::new(vec![Box::new(YamlLoader {})]));
             let rt = Runtime::new().expect("failed to get tokio runtime");
 
@@ -100,11 +103,13 @@ fn main() -> std::io::Result<()> {
                 dag,
                 writer: Arc::from(multiwriter),
                 multiloader,
+                metrics: prometheus_handle.clone(),
             };
 
             App::new()
                 .with_state(state)
                 .at("/live", get(handler_service(async || "OK")))
+                .at("/metrics", get(handler_service(local_routes::metrics_handler)))
                 .at("/reload", get(handler_service(local_routes::reload)))
                 .at(
                     "/data/:format/*rest",
@@ -113,7 +118,7 @@ fn main() -> std::io::Result<()> {
                 .enclosed_fn(utils::error_handler)
                 .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
                 .serve()
-                .bind(format!("0.0.0.0:{}", &4000))?
+                .bind(format!("0.0.0.0:{port}"))?
                 .run()
                 .wait()
         }
@@ -122,12 +127,13 @@ fn main() -> std::io::Result<()> {
             branch,
             username,
             password,
+            port,
         } => {
             let creds = make_git_creds(username, password);
             let creds_clone = creds.clone();
             let rt = Runtime::new()?;
             rt.block_on(clone_or_update(&repo_url, &branch, &creds))
-                .expect("failed to initialyze repository");
+                .expect("failed to initialize repository");
 
             let commits = list_all_commit_hashes(&repo_url).unwrap();
 
@@ -141,11 +147,13 @@ fn main() -> std::io::Result<()> {
                 writer: Arc::from(multiwriter),
                 commits: ArcSwap::from(Arc::from(commits)),
                 multiloader: Arc::from(MultiLoader::new(vec![Box::new(YamlLoader {})])),
+                metrics: prometheus_handle,
             });
 
             App::new()
                 .with_state(state)
                 .at("/live", get(handler_service(async || "OK")))
+                .at("/metrics", get(handler_service(git_routes::metrics_handler)))
                 .at("/reload", get(handler_service(git_routes::reload)))
                 .at(
                     "/data/:commit/:format/*rest",
@@ -154,7 +162,7 @@ fn main() -> std::io::Result<()> {
                 .enclosed_fn(utils::error_handler)
                 .enclosed(TowerHttpCompat::new(TraceLayer::new_for_http()))
                 .serve()
-                .bind(format!("0.0.0.0:{}", &4000))?
+                .bind(format!("0.0.0.0:{port}"))?
                 .run()
                 .wait()
         }

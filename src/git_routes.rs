@@ -5,13 +5,15 @@ use crate::{
     DagEntry,
     authorizer::Authorizer,
     config::GitAppState,
-    fs::git::{GitFileProvider, clone_or_update, list_all_commit_hashes},
+    fs::git::{GitFileProvider, clone_or_update, is_valid_commit_hash, list_all_commit_hashes},
     loader::MultiLoader,
+    metrics,
     render::Dag,
     utils::GetError,
 };
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use xitca_web::handler::state::StateRef;
 use xitca_web::{handler::params::Params, http::HeaderMap};
@@ -39,19 +41,30 @@ pub async fn get_data(
     Params((commit, format, path)): Params<(String, String, String)>,
     StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
 ) -> Result<String, GetError> {
+    let start = Instant::now();
+
     let token = headers
         .get("token")
         .ok_or(GetError::Unauthorized)?
         .to_str()
         .map_err(|_| GetError::BadRequest)?;
 
+    // Validate commit hash format before checking if it exists
+    if !is_valid_commit_hash(&commit) {
+        return Err(GetError::BadRequest);
+    }
+
     if !state.commits.load().contains(&commit) {
         return Err(GetError::CommitNotFound);
     }
 
     let dag = match state.dag.entry(commit.clone()) {
-        Entry::Occupied(entry) => entry.into_ref(),
+        Entry::Occupied(entry) => {
+            metrics::record_git_cache(true);
+            entry.into_ref()
+        }
         Entry::Vacant(entry) => {
+            metrics::record_git_cache(false);
             let d = new_dag_git(&state.repo_config.url, &commit, state.multiloader.clone()).await?;
             entry.insert(d)
         }
@@ -65,7 +78,14 @@ pub async fn get_data(
                 .await
                 .map_err(|_| GetError::MissingItem)?;
 
-            state.writer.write(&format, &d).ok_or(GetError::BadRequest)
+            let result = state
+                .writer
+                .write(&format, &d)
+                .ok_or(GetError::BadRequest)?
+                .map_err(|_| GetError::BadRequest);
+
+            metrics::record_render(&format, result.is_ok(), start.elapsed());
+            result
         }
         false => Err(GetError::Unauthorized),
     }
@@ -89,18 +109,27 @@ pub async fn reload(
     // TODO: add fetch before list
     let lock = reload_lock().await.clone();
     if let Ok(guard) = lock.try_lock() {
-        clone_or_update(
+        let result = clone_or_update(
             &state.repo_config.url,
             &state.repo_config.branch,
             &state.repo_config.creds,
         )
-        .await
-        .map_err(|_| GetError::Unauthorized)?;
+        .await;
+
+        metrics::record_reload(result.is_ok());
+
+        result.map_err(|_| GetError::Unauthorized)?;
         let commits =
             list_all_commit_hashes(&state.repo_config.url).map_err(|_| GetError::Unknown)?;
         state.commits.store(Arc::from(commits));
         drop(guard);
-    } 
+    }
 
     Ok("OK".to_string())
+}
+
+pub async fn metrics_handler(
+    StateRef(state): StateRef<'_, GitAppState<GitFileProvider>>,
+) -> String {
+    state.metrics.render()
 }

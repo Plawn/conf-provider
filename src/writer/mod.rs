@@ -7,10 +7,29 @@ pub mod docker_env;
 use std::fmt::Debug;
 
 use crate::Value;
+
+/// Trait for serializing internal `Value` type to various output formats.
 pub trait ValueWriter: Debug + Send + Sync {
+    /// Returns the format extension this writer handles (e.g., "json", "yaml").
     fn ext(&self) -> &'static str;
-    fn to_str(&self, v: &Value) -> String;
+    /// Serializes a `Value` to a string representation.
+    fn to_str(&self, v: &Value) -> Result<String, WriterError>;
 }
+
+/// Error type for serialization failures.
+#[derive(Debug, Clone)]
+pub struct WriterError {
+    pub format: &'static str,
+    pub message: String,
+}
+
+impl std::fmt::Display for WriterError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Failed to serialize to {}: {}", self.format, self.message)
+    }
+}
+
+impl std::error::Error for WriterError {}
 
 #[derive(Debug)]
 pub struct MultiWriter {
@@ -22,7 +41,7 @@ impl MultiWriter {
         Self { loaders }
     }
 
-    pub fn write(&self, ext: &str, content: &Value) -> Option<String> {
+    pub fn write(&self, ext: &str, content: &Value) -> Option<Result<String, WriterError>> {
         self.loaders
             .iter()
             .find(|e| ext == e.ext())

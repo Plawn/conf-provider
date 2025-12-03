@@ -12,28 +12,52 @@ use crate::{
     utils::get_conf_strings,
 };
 
+/// Error type for configuration rendering failures.
 #[derive(Debug, Clone)]
 pub enum RenderError {
+    /// Generic render error.
     All,
 }
 
 #[derive(Debug)]
-pub struct DagInner<P: FileProvider> {
-    // Stable configuration
+struct DagInner<P: FileProvider> {
+    /// The file provider used to load configuration files.
     file_provider: P,
+    /// Multi-format loader for parsing configuration files.
     multiloader: Arc<MultiLoader>,
-
-    // The dynamically reloaded, shared state
+    /// Atomically swappable map of loaded configuration files.
     files: ArcSwap<DagFiles>,
 }
 
+/// A directed acyclic graph of configuration files with dependency resolution.
+///
+/// The DAG loads configuration files from a `FileProvider`, parses them using
+/// a `MultiLoader`, and resolves template references between files. It supports
+/// atomic hot-reloading of configurations.
+///
+/// # Template Syntax
+///
+/// Configuration files can reference values from other files using the `${path}` syntax:
+/// - `${other_file.key}` - References `key` from `other_file`
+/// - `${other_file.nested.key}` - References nested values
+///
+/// Files declare their dependencies in a special `<!>` metadata section:
+/// ```yaml
+/// <!>:
+///   import:
+///     - base_config
+///     - secrets
+/// ```
 #[derive(Clone, Debug)]
 pub struct Dag<P: FileProvider> {
     inner: Arc<DagInner<P>>,
 }
 
 impl<P: FileProvider> Dag<P> {
-    // new() now initializes the ArcSwap with the first load
+    /// Creates a new DAG and loads all configuration files.
+    ///
+    /// This will read all files from the provider, parse them, and prepare
+    /// them for rendering. The initial load happens synchronously.
     pub async fn new(file_provider: P, multiloader: Arc<MultiLoader>) -> anyhow::Result<Self> {
         let inner = Arc::new(DagInner {
             file_provider,
@@ -44,6 +68,11 @@ impl<P: FileProvider> Dag<P> {
         handle.reload().await?;
         Ok(handle)
     }
+    /// Returns the fully rendered configuration for the given file path.
+    ///
+    /// The rendering is lazy and cached - the first call computes the result,
+    /// subsequent calls return the cached value. Template variables are resolved
+    /// by recursively rendering imported files.
     pub async fn get_rendered(&self, file_path: &str) -> anyhow::Result<Value> {
         let files_snapshot = self.inner.files.load();
         let konf = files_snapshot
@@ -79,7 +108,10 @@ impl<P: FileProvider> Dag<P> {
         Ok(rendered_value.clone())
     }
 
-    // reload() now takes &self and updates the ArcSwap
+    /// Reloads all configuration files from the provider.
+    ///
+    /// This atomically replaces all loaded configurations. Any cached
+    /// rendered values are invalidated and will be recomputed on next access.
     pub async fn reload(&self) -> Result<(), LoaderError> {
         let paths = self.inner.file_provider.list().await;
         let mut files: DagFiles = HashMap::new();
@@ -92,7 +124,7 @@ impl<P: FileProvider> Dag<P> {
                         files.insert(path.filename, k);
                     }
                     Err(_) => {
-                        eprintln!("failed to load {:?}", &path)
+                        tracing::warn!("failed to load {:?}", &path)
                     }
                 }
             }
@@ -102,8 +134,8 @@ impl<P: FileProvider> Dag<P> {
         Ok(())
     }
 
+    /// Returns the raw (unrendered) configuration value for the given file.
     pub fn get_raw(&self, file_path: &str) -> Result<Value, RenderError> {
-        // Load the current snapshot of files to perform the read
         let files_snapshot = self.inner.files.load();
         files_snapshot
             .get(file_path)

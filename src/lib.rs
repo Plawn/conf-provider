@@ -1,8 +1,5 @@
 #![feature(error_generic_member_access, error_reporter)]
-use std::{collections::HashMap, pin::Pin, sync::Arc};
-
-use futures::future::Shared;
-
+use std::collections::HashMap;
 
 use async_once_cell::OnceCell;
 use serde::Serialize;
@@ -19,13 +16,23 @@ pub mod authorizer;
 pub mod git_routes;
 pub mod local_routes;
 pub mod config;
+pub mod metrics;
+pub mod telemetry;
+/// A configuration entry that holds both raw and rendered versions.
+///
+/// The `raw` field contains the original parsed configuration, while
+/// `rendered` is lazily populated with the fully resolved version after
+/// template variables have been substituted.
 #[derive(Debug)]
 pub struct Konf {
+    /// The original parsed configuration value before template resolution.
     pub raw: Value,
+    /// Lazily computed rendered value with all template variables resolved.
     pub rendered: OnceCell<Value>,
 }
 
 impl Konf {
+    /// Creates a new `Konf` with the given raw value.
     pub fn new(raw: Value) -> Self {
         Self {
             raw,
@@ -34,19 +41,34 @@ impl Konf {
     }
 }
 
+/// A cache entry combining a DAG with its associated authorizer.
+/// Used in git mode to cache per-commit configurations.
 #[derive(Debug)]
 pub struct DagEntry<P: FileProvider> {
+    /// The configuration DAG for this entry.
     pub dag: Dag<P>,
+    /// The authorizer controlling access to configurations.
     pub authorizer: Authorizer,
 }
 
+/// Internal representation of configuration values.
+///
+/// This enum provides a format-agnostic representation that can be
+/// loaded from various formats (YAML, JSON, etc.) and serialized
+/// to multiple output formats.
 #[derive(Debug, Clone, Serialize)]
 pub enum Value {
+    /// A string value.
     String(String),
+    /// An ordered list of values.
     Sequence(Sequence),
+    /// A key-value mapping (object/dictionary).
     Mapping(Mapping),
+    /// A numeric value (stored as f64).
     Number(f64),
+    /// A boolean value.
     Boolean(bool),
+    /// A null/empty value.
     Null,
 }
 
@@ -85,6 +107,3 @@ impl Value {
 }
 
 pub type DagFiles = HashMap<String, Konf>;
-pub type RenderCache = HashMap<String, Value>;
-pub type SharedResult = Result<Value, Arc<anyhow::Error>>;
-pub type InFlightFuture = Shared<Pin<Box<dyn Future<Output = SharedResult> + Send + Sync>>>;

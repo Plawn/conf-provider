@@ -5,37 +5,31 @@ use git2::{Oid, Repository};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use regex::Regex;
 
 use crate::fs::{DirEntry, FileProvider};
 
-// We implement TryFrom for a standard Path reference
-impl TryFrom<&Path> for DirEntry {
-    type Error = std::io::Error;
+/// Regex for validating git repository URLs.
+/// Supports: https://, http://, git://, ssh://, and git@host:path formats.
+static GIT_URL_RE: OnceLock<Regex> = OnceLock::new();
 
-    fn try_from(path: &Path) -> Result<Self, Self::Error> {
-        let filename = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid filename")
-            })?
-            .to_string();
-
-        let full_path = path.to_string_lossy().into_owned();
-
-        let ext = path
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-
-        Ok(DirEntry {
-            filename,
-            full_path,
-            ext,
-        })
-    }
+fn git_url_regex() -> &'static Regex {
+    GIT_URL_RE.get_or_init(|| {
+        Regex::new(r"^(https?://|git://|ssh://|git@[\w.-]+:).+$").expect("invalid regex")
+    })
 }
+
+/// Validates that a string is a valid git repository URL.
+pub fn is_valid_git_url(url: &str) -> bool {
+    git_url_regex().is_match(url)
+}
+
+/// Validates that a string is a valid git commit hash (40 hex characters or 7+ for short hash).
+pub fn is_valid_commit_hash(hash: &str) -> bool {
+    (7..=40).contains(&hash.len()) && hash.chars().all(|c| c.is_ascii_hexdigit())
+}
+
 
 #[derive(Clone, Debug)]
 pub struct GitFileProvider {
@@ -86,7 +80,7 @@ impl GitFileProvider {
         repo.find_commit(commit_oid)
             .map_err(|e| anyhow::anyhow!("Commit '{}' not found: {}", commit_hash, e))?;
 
-        println!(
+        tracing::info!(
             "Successfully initialized provider for commit {}",
             commit_hash
         );
@@ -144,12 +138,16 @@ impl FileProvider for GitFileProvider {
             let _ = tree.walk(git2::TreeWalkMode::PostOrder, |root, entry| {
                 // We only care about files (blobs), not directories
                 if entry.kind() == Some(git2::ObjectType::Blob)
-                    && let Some(filename) = entry.name() {
-                        let full_path = Path::new(root).join(filename);
-                        if let Ok(dir_entry) = DirEntry::try_from(full_path.as_path()) {
-                            entries.push(dir_entry);
-                        }
+                    && let Some(filename) = entry.name()
+                {
+                    let relative_path = Path::new(root).join(filename);
+                    let full_path_str = relative_path.to_string_lossy().into_owned();
+                    if let Some(dir_entry) =
+                        DirEntry::from_relative_path(&relative_path, &full_path_str)
+                    {
+                        entries.push(dir_entry);
                     }
+                }
                 git2::TreeWalkResult::Ok
             });
 
@@ -210,23 +208,23 @@ pub async fn clone_or_update(
     let branch_name = branch_name.to_string();
     let rep = tokio::task::spawn_blocking(move || -> anyhow::Result<Repository> {
         let rep: Repository = if path.exists() {
-            println!("Repository exists. Fetching updates...");
+            tracing::info!("Repository exists. Fetching updates...");
             let repo = Repository::open(&path)?;
             let mut remote = repo.find_remote("origin")?;
 
             // Branch for fetching with or without credentials
             if let Some(c) = creds {
-                println!("Fetching with credentials.");
+                tracing::debug!("Fetching with credentials.");
                 let mut fetch_options = create_auth_options(c);
                 remote.fetch(&[branch_name], Some(&mut fetch_options), None)?;
             } else {
-                println!("Fetching without credentials.");
+                tracing::debug!("Fetching without credentials.");
                 remote.fetch(&[branch_name], None, None)?;
             }
             drop(remote);
             repo
         } else {
-            println!("Cloning repository from {}...", &repo_url);
+            tracing::info!("Cloning repository from {}...", &repo_url);
             // Ensure the parent directory exists before cloning
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -237,12 +235,12 @@ pub async fn clone_or_update(
 
             // Branch for cloning with or without credentials
             if let Some(c) = creds.clone() {
-                println!("Cloning with credentials.");
+                tracing::debug!("Cloning with credentials.");
                 let fetch_options = create_auth_options(c);
                 // Configure the builder with our fetch options. This moves the options.
                 builder.fetch_options(fetch_options);
             } else {
-                println!("Cloning without credentials.");
+                tracing::debug!("Cloning without credentials.");
             }
 
             // Perform the clone with the configured builder

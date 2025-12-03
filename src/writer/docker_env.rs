@@ -1,4 +1,4 @@
-use crate::{writer::ValueWriter, Value};
+use crate::{writer::{ValueWriter, WriterError}, Value};
 
 #[derive(Debug)]
 pub struct DockerEnvVarWriter {}
@@ -8,10 +8,10 @@ impl ValueWriter for DockerEnvVarWriter {
         "docker-env"
     }
 
-    fn to_str(&self, v: &Value) -> String {
+    fn to_str(&self, v: &Value) -> Result<String, WriterError> {
         let mut lines = Vec::new();
         flatten_to_env("", v, &mut lines);
-        lines.join("\n")
+        Ok(lines.join("\n"))
     }
 }
 

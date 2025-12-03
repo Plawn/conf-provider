@@ -2,12 +2,27 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{fs::FileProvider, loader::MultiLoader, utils::get_conf_strings};
 
+/// Token-based authorizer for controlling access to configuration files.
+///
+/// In git mode, each configuration file can specify which tokens are allowed
+/// to access it using the `auth` key in the `<!>` metadata section:
+///
+/// ```yaml
+/// <!>:
+///   auth:
+///     - token1
+///     - token2
+/// ```
 #[derive(Debug)]
 pub struct Authorizer {
-    paths: HashMap<String, HashSet<String>>, // path -> set(auth tokens)
+    /// Maps file paths to the set of tokens allowed to access them.
+    paths: HashMap<String, HashSet<String>>,
 }
 
 impl Authorizer {
+    /// Checks if the given token is authorized to access the file at `path`.
+    ///
+    /// Returns `false` if the path has no authorization configured or the token is not in the allowed list.
     pub fn authorize(&self, path: &str, token: &str) -> bool {
         self.paths
             .get(path)
@@ -15,6 +30,7 @@ impl Authorizer {
             .unwrap_or(false)
     }
 
+    /// Creates a new authorizer by scanning all files for auth configurations.
     pub async fn new<P: FileProvider>(fs: &P, loader: &MultiLoader) -> Self {
         const IMPORT_KEY: &str = "auth";
         let mut paths: HashMap<String, HashSet<String>> = HashMap::new();
@@ -36,8 +52,8 @@ impl Authorizer {
                             }
                         }
                     }
-                    Err(e) => {
-                        eprintln!("failed to read {:?}", &path);
+                    Err(_) => {
+                        tracing::warn!("failed to read {:?}", &path);
                     }
                 }
             }

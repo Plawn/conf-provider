@@ -50,7 +50,7 @@ pub fn from_yaml(yaml_value: serde_yaml::Value) -> Value {
         }
 
         // Convert other types to strings
-        serde_yaml::Value::Number(n) => Value::Number(n.as_f64().unwrap()),
+        serde_yaml::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
         serde_yaml::Value::Bool(b) => Value::String(b.to_string()),
         serde_yaml::Value::Null => Value::Null,
 

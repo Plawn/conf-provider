@@ -1,4 +1,4 @@
-use crate::{writer::ValueWriter, Value};
+use crate::{writer::{ValueWriter, WriterError}, Value};
 
 #[derive(Debug)]
 pub struct YamlWriter {}
@@ -7,8 +7,11 @@ impl ValueWriter for YamlWriter {
     fn ext(&self) -> &'static str {
         "yaml"
     }
-    fn to_str(&self, v: &Value) -> String {
-        serde_yaml::to_string(&to_yaml(v)).unwrap()
+    fn to_str(&self, v: &Value) -> Result<String, WriterError> {
+        serde_yaml::to_string(&to_yaml(v)).map_err(|e| WriterError {
+            format: "yaml",
+            message: e.to_string(),
+        })
     }
 }
 

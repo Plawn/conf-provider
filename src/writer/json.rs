@@ -1,4 +1,4 @@
-use crate::{writer::ValueWriter, Value};
+use crate::{writer::{ValueWriter, WriterError}, Value};
 
 #[derive(Debug)]
 pub struct JsonWriter {}
@@ -7,8 +7,11 @@ impl ValueWriter for JsonWriter {
     fn ext(&self) -> &'static str {
         "json"
     }
-    fn to_str(&self, v: &Value) -> String {
-        serde_json::to_string(&to_json(v)).unwrap()
+    fn to_str(&self, v: &Value) -> Result<String, WriterError> {
+        serde_json::to_string(&to_json(v)).map_err(|e| WriterError {
+            format: "json",
+            message: e.to_string(),
+        })
     }
 }
 

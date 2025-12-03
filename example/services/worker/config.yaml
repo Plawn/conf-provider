@@ -1,0 +1,15 @@
+<!>:
+  import:
+    - common/database
+    - common/redis
+
+service:
+  name: worker-service
+  concurrency: 4
+
+database:
+  url: postgres://${common/database.user}:${common/database.password}@${common/database.host}:${common/database.port}/${common/database.name}
+
+queue:
+  redis_url: redis://${common/redis.host}:${common/redis.port}/${common/redis.db}
+  queue_name: jobs

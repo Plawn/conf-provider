@@ -1,0 +1,14 @@
+<!>:
+  import:
+    - common/database
+    - common/redis
+
+service:
+  name: api-service
+  port: 8080
+
+database:
+  url: postgres://${common/database.user}:${common/database.password}@${common/database.host}:${common/database.port}/${common/database.name}
+
+cache:
+  url: redis://${common/redis.host}:${common/redis.port}/${common/redis.db}

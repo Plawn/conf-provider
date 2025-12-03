@@ -1,4 +1,4 @@
-use crate::{Value, writer::ValueWriter};
+use crate::{Value, writer::{ValueWriter, WriterError}};
 
 #[derive(Debug)]
 pub struct PropertiesWriter {}
@@ -8,10 +8,10 @@ impl ValueWriter for PropertiesWriter {
         "properties"
     }
 
-    fn to_str(&self, v: &Value) -> String {
+    fn to_str(&self, v: &Value) -> Result<String, WriterError> {
         let mut properties = String::new();
         write_properties(v, "", &mut properties);
-        properties
+        Ok(properties)
     }
 }
 

@@ -63,7 +63,7 @@ where
         Ok(res) => Ok(res),
         Err(e) => {
             // debug format error info.
-            println!("{e:?}");
+            tracing::debug!("{e:?}");
 
             // generate http response actively. from here it's OK to early return it in Result::Ok
             // variant as error_handler function's output
@@ -95,7 +95,7 @@ where
             // utilize std::error module for backtrace and more advanced error info.
             let report = error::Report::new(&e).pretty(true).show_backtrace(true);
             // display error report
-            println!("{report}");
+            tracing::error!("{report}");
 
             // the most basic error handling is to ignore it and return as is. xitca-web is able to take care
             // of error by utilizing it's according trait implements(Debug,Display,Error and Service impls)
@@ -111,7 +111,7 @@ pub enum GetError {
     Unknown,
     BadRequest,
     Unauthorized,
-    Forbiden
+    Forbidden
 }
 
 impl fmt::Display for GetError {
@@ -148,7 +148,7 @@ impl<'r, C> Service<WebContext<'r, C>> for GetError {
             GetError::BadRequest => StatusCode::BAD_REQUEST,
             GetError::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
             GetError::Unauthorized => StatusCode::UNAUTHORIZED,
-            GetError::Forbiden => StatusCode::FORBIDDEN,
+            GetError::Forbidden => StatusCode::FORBIDDEN,
         }
         .call(ctx)
         .await
