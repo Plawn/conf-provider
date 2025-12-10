@@ -1,6 +1,6 @@
 
 start-git:
-    cargo run --bin server -- git --repo-url "https://git.blumana.app/infra/configuration.git" --branch "main" --username "<>" --password "<>"
+    cargo run --bin server -- git --repo-url "https://git.blumana.app/infra/configuration.git" --branch "main" --username "c" --password "glpat-.0w1o703f1"
 
 start-local:
     cargo run --bin server -- local --folder example

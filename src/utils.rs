@@ -106,17 +106,52 @@ where
 
 #[derive(Debug)]
 pub enum GetError {
-    CommitNotFound,
-    MissingItem,
-    Unknown,
-    BadRequest,
-    Unauthorized,
-    Forbidden
+    /// The requested commit hash was not found in the repository
+    CommitNotFound { commit: String },
+    /// The requested config file was not found
+    ConfigNotFound { path: String },
+    /// Failed to render the configuration (e.g., missing imports, circular deps)
+    RenderError { path: String, reason: String },
+    /// Failed to initialize the DAG for a commit
+    DagInitError { commit: String, reason: String },
+    /// Unknown/internal error
+    InternalError { reason: String },
+    /// Invalid request (e.g., invalid commit hash format, unknown output format)
+    BadRequest { reason: String },
+    /// Missing or invalid authentication token
+    Unauthorized { reason: String },
+    /// Token is valid but not authorized for this resource
+    Forbidden { path: String },
 }
 
 impl fmt::Display for GetError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("Get error")
+        match self {
+            GetError::CommitNotFound { commit } => {
+                write!(f, "commit not found: '{commit}'")
+            }
+            GetError::ConfigNotFound { path } => {
+                write!(f, "config file not found: '{path}'")
+            }
+            GetError::RenderError { path, reason } => {
+                write!(f, "failed to render config '{path}': {reason}")
+            }
+            GetError::DagInitError { commit, reason } => {
+                write!(f, "failed to initialize config for commit '{commit}': {reason}")
+            }
+            GetError::InternalError { reason } => {
+                write!(f, "internal error: {reason}")
+            }
+            GetError::BadRequest { reason } => {
+                write!(f, "bad request: {reason}")
+            }
+            GetError::Unauthorized { reason } => {
+                write!(f, "unauthorized: {reason}")
+            }
+            GetError::Forbidden { path } => {
+                write!(f, "forbidden: not authorized to access '{path}'")
+            }
+        }
     }
 }
 
@@ -135,23 +170,27 @@ impl From<GetError> for Error {
     }
 }
 
-// response generator of MyError. in this case we generate blank bad request error.
+// response generator of GetError. Returns appropriate HTTP status codes with error message body.
 impl<'r, C> Service<WebContext<'r, C>> for GetError {
     type Response = WebResponse;
     type Error = Infallible;
 
     async fn call(&self, ctx: WebContext<'r, C>) -> Result<Self::Response, Self::Error> {
-        // StatusCode::INTERNAL_SERVER_ERROR.call(ctx).await
-        match self {
-            GetError::CommitNotFound => StatusCode::NOT_FOUND,
-            GetError::MissingItem => StatusCode::NOT_FOUND,
-            GetError::BadRequest => StatusCode::BAD_REQUEST,
-            GetError::Unknown => StatusCode::INTERNAL_SERVER_ERROR,
-            GetError::Unauthorized => StatusCode::UNAUTHORIZED,
-            GetError::Forbidden => StatusCode::FORBIDDEN,
-        }
-        .call(ctx)
-        .await
+        let status = match self {
+            GetError::CommitNotFound { .. } => StatusCode::NOT_FOUND,
+            GetError::ConfigNotFound { .. } => StatusCode::NOT_FOUND,
+            GetError::RenderError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            GetError::DagInitError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            GetError::BadRequest { .. } => StatusCode::BAD_REQUEST,
+            GetError::InternalError { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            GetError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
+            GetError::Forbidden { .. } => StatusCode::FORBIDDEN,
+        };
+        // Include the error message in the response body
+        (self.to_string(), status)
+            .respond(ctx)
+            .await
+            .map_err(|_| unreachable!())
     }
 }
 

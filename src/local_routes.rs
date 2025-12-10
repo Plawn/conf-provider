@@ -11,17 +11,24 @@ pub async fn get_data(
 ) -> Result<String, GetError> {
     let start = Instant::now();
 
-    let d = state
+    let rendered = state
         .dag
         .get_rendered(&path)
         .await
-        .map_err(|_| GetError::MissingItem)?;
+        .map_err(|e| GetError::RenderError {
+            path: path.clone(),
+            reason: e.to_string(),
+        })?;
 
     let result = state
         .writer
-        .write(&format, &d)
-        .ok_or(GetError::BadRequest)?
-        .map_err(|_| GetError::BadRequest);
+        .write(&format, &rendered)
+        .ok_or_else(|| GetError::BadRequest {
+            reason: format!("unknown output format: '{format}'"),
+        })?
+        .map_err(|e| GetError::InternalError {
+            reason: format!("failed to serialize to '{format}': {e}"),
+        });
 
     metrics::record_render(&format, result.is_ok(), start.elapsed());
     result
