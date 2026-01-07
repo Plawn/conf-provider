@@ -64,8 +64,10 @@ pub enum Value {
     Sequence(Sequence),
     /// A key-value mapping (object/dictionary).
     Mapping(Mapping),
-    /// A numeric value (stored as f64).
-    Number(f64),
+    /// An integer numeric value.
+    Int(i64),
+    /// A floating-point numeric value.
+    Float(f64),
     /// A boolean value.
     Boolean(bool),
     /// A null/empty value.

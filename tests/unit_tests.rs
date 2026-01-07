@@ -55,7 +55,7 @@ fn test_value_as_str() {
     let value = Value::String("test".to_string());
     assert_eq!(value.as_str(), Some(&"test".to_string()));
 
-    let value = Value::Number(42.0);
+    let value = Value::Int(42);
     assert_eq!(value.as_str(), None);
 }
 
@@ -152,7 +152,7 @@ fn sample_value() -> Value {
 
     let mut map = HashMap::new();
     map.insert("string".to_string(), Value::String("hello".to_string()));
-    map.insert("number".to_string(), Value::Number(42.0));
+    map.insert("number".to_string(), Value::Int(42));
     map.insert("boolean".to_string(), Value::Boolean(true));
     map.insert("null".to_string(), Value::Null);
     map.insert("object".to_string(), Value::Mapping(inner));
@@ -207,7 +207,7 @@ fn test_env_writer() {
 
     let mut map = HashMap::new();
     map.insert("database_url".to_string(), Value::String("postgres://localhost".to_string()));
-    map.insert("port".to_string(), Value::Number(8080.0));
+    map.insert("port".to_string(), Value::Int(8080));
 
     let value = Value::Mapping(map);
     let result = writer.to_str(&value);
@@ -242,7 +242,7 @@ fn test_properties_writer() {
 
     let mut map = HashMap::new();
     map.insert("app.name".to_string(), Value::String("myapp".to_string()));
-    map.insert("app.version".to_string(), Value::Number(1.0));
+    map.insert("app.version".to_string(), Value::Int(1));
 
     let value = Value::Mapping(map);
     let result = writer.to_str(&value);

@@ -31,7 +31,8 @@ impl ValueWriter for TomlWriter {
 /// Convert from internal Value back to toml::Value
 pub fn to_toml(value: &Value) -> toml::Value {
     match value {
-        Value::Number(n) => toml::Value::Float(*n),
+        Value::Int(n) => toml::Value::Integer(*n),
+        Value::Float(n) => toml::Value::Float(*n),
         Value::String(s) => toml::Value::String(s.clone()),
         Value::Boolean(b) => toml::Value::Boolean(*b),
         Value::Null => toml::Value::String("".to_string()), // TOML doesn't have a null type, representing as empty string

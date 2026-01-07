@@ -36,7 +36,10 @@ fn write_properties(value: &Value, prefix: &str, properties: &mut String) {
         Value::String(s) => {
             properties.push_str(&format!("{}=\"{}\"\n", prefix, s));
         }
-        Value::Number(n) => {
+        Value::Int(n) => {
+            properties.push_str(&format!("{}={}\n", prefix, n));
+        }
+        Value::Float(n) => {
             properties.push_str(&format!("{}={}\n", prefix, n));
         }
         Value::Boolean(b) => {

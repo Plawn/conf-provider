@@ -40,7 +40,10 @@ fn flatten_to_env(prefix: &str, value: &Value, lines: &mut Vec<String>) {
         Value::String(s) => {
             lines.push(format!("{}={}", prefix.to_uppercase(), s));
         }
-        Value::Number(n) => {
+        Value::Int(n) => {
+            lines.push(format!("{}={}", prefix.to_uppercase(), n));
+        }
+        Value::Float(n) => {
             lines.push(format!("{}={}", prefix.to_uppercase(), n));
         }
         Value::Boolean(b) => {

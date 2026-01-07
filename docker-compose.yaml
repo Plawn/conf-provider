@@ -1,7 +1,8 @@
 
 services:
   app:
-    image: plawn/conf-provider
+    # image: plawn/conf-provider
+    build: .
     restart: unless-stopped
     env_file: prod.env
     ports:

@@ -18,7 +18,8 @@ impl ValueWriter for JsonWriter {
 pub fn to_json(value: &Value) -> serde_json::Value {
     use serde_json::{Map, Value as JsonValue};
     match value {
-        Value::Number(n) => serde_json::Number::from_f64(*n)
+        Value::Int(n) => JsonValue::Number(serde_json::Number::from(*n)),
+        Value::Float(n) => serde_json::Number::from_f64(*n)
             .map(JsonValue::Number)
             .unwrap_or(JsonValue::Null),
         Value::String(s) => serde_json::Value::String(s.clone()),

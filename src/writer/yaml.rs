@@ -18,7 +18,8 @@ impl ValueWriter for YamlWriter {
 /// Convert from internal Value back to serde_yaml::Value
 pub fn to_yaml(value: &Value) -> serde_yaml::Value {
     match value {
-        Value::Number(n) => serde_yaml::Value::Number(serde_yaml::Number::from(*n)),
+        Value::Int(n) => serde_yaml::Value::Number(serde_yaml::Number::from(*n)),
+        Value::Float(n) => serde_yaml::Value::Number(serde_yaml::Number::from(*n)),
         Value::String(s) => serde_yaml::Value::String(s.clone()),
         Value::Boolean(b) => serde_yaml::Value::Bool(*b),
         Value::Null => serde_yaml::Value::Null,

@@ -44,7 +44,8 @@ fn lookup_in_deps<'a>(path: &str, deps: &'a HashMap<String, Value>) -> Option<&'
 fn value_to_string(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(s.clone()),
-        Value::Number(n) => Some(n.to_string()),
+        Value::Int(n) => Some(n.to_string()),
+        Value::Float(n) => Some(n.to_string()),
         Value::Boolean(b) => Some(b.to_string()),
         Value::Null => Some("null".to_string()),
         // Sequences and Mappings can't be meaningfully embedded in a string

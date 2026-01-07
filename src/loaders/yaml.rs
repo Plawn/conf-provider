@@ -49,9 +49,18 @@ pub fn from_yaml(yaml_value: serde_yaml::Value) -> Value {
             Value::Mapping(hashmap)
         }
 
-        // Convert other types to strings
-        serde_yaml::Value::Number(n) => Value::Number(n.as_f64().unwrap_or(0.0)),
-        serde_yaml::Value::Bool(b) => Value::String(b.to_string()),
+        // Handle numbers - distinguish between integers and floats
+        serde_yaml::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(u) = n.as_u64() {
+                // Handle large unsigned integers that don't fit in i64
+                Value::Int(u as i64)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_yaml::Value::Bool(b) => Value::Boolean(b),
         serde_yaml::Value::Null => Value::Null,
 
         // Tagged values - extract the inner value
