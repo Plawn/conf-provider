@@ -25,6 +25,13 @@ KONF_PORT=8080 cargo +nightly run --bin server -- local --folder /path/to/config
 
 # Build the cache helper binary
 cargo +nightly build --bin cache
+
+# Render a config file locally (for testing before pushing)
+cargo +nightly run --bin render -- -f /path/to/configs -n myconfig
+cargo +nightly run --bin render -- -f /path/to/configs -n myconfig -o json
+cargo +nightly run --bin render -- -f /path/to/configs -n myconfig -o env
+
+# Available output formats: yaml (default), json, env, properties, toml, docker_env
 ```
 
 ## Architecture
