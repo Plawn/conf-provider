@@ -11,8 +11,25 @@ A configuration server that serves YAML configuration files with templating supp
 - **Git integration**: Serve configs at specific commits with token-based access control
 - **Observability**: Prometheus metrics and OpenTelemetry tracing support
 
-## Requirements
+## Installation
 
+### Pre-built Binaries
+
+Download pre-built binaries from the [Releases](https://github.com/your-repo/konf-provider/releases) page.
+
+Available platforms:
+- Linux x86_64 (`x86_64-unknown-linux-gnu`)
+- Linux ARM64 (`aarch64-unknown-linux-gnu`)
+- macOS x86_64 (`x86_64-apple-darwin`)
+- macOS ARM64 / Apple Silicon (`aarch64-apple-darwin`)
+
+Each release includes:
+- `konf-server` - The configuration server
+- `konf-render` - CLI tool for local rendering
+
+### Build from Source
+
+Requirements:
 - Rust nightly (edition 2024)
 
 ## Build
@@ -46,6 +63,44 @@ cargo +nightly run --bin server -- git \
     [--username <user> --password <pass>] \
     [--port 4000]
 ```
+
+### Render CLI
+
+Test and preview configuration rendering locally before deploying:
+
+```bash
+cargo +nightly run --bin render -- -f /path/to/configs -n myconfig
+```
+
+#### Options
+
+| Option | Short | Description | Default |
+|--------|-------|-------------|---------|
+| `--folder` | `-f` | Folder containing configuration files | (required) |
+| `--file` | `-n` | File to render (without extension) | (required) |
+| `--format` | `-o` | Output format | `yaml` |
+
+#### Examples
+
+```bash
+# Render as YAML (default)
+cargo +nightly run --bin render -- -f ./configs -n app
+
+# Render as JSON
+cargo +nightly run --bin render -- -f ./configs -n app -o json
+
+# Render as environment variables
+cargo +nightly run --bin render -- -f ./configs -n app -o env
+
+# Render nested config
+cargo +nightly run --bin render -- -f ./configs -n services/api/config -o toml
+```
+
+#### Use Cases
+
+- **Local testing**: Validate configuration templates before pushing to git
+- **CI/CD pipelines**: Generate config files during build/deploy
+- **Debugging**: Inspect rendered output to troubleshoot template issues
 
 ### Environment Variables
 
