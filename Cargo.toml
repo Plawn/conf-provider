@@ -24,7 +24,7 @@ futures = "0.3.31"
 async-once-cell = "0.5"
 tokio = { version = "1.47.1", features = ["full"] }
 dashmap = "6.1.0"
-git2 = "0.18"
+git2 = { version = "0.18", features = ["vendored-openssl"] }
 sha2 = "0.10"
 hex = "0.4"
 clap = {version = "4.5.45", features = ["derive", "env"]}
