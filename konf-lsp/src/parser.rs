@@ -9,6 +9,9 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_yaml::Value as YamlValue;
 
+// Re-use utilities from the base lib
+pub use konf_provider::imports::{resolve_relative_path, METADATA_KEY};
+
 /// Regex for template references: ${path.to.value}
 static TEMPLATE_RE: OnceLock<Regex> = OnceLock::new();
 /// Regex for incomplete template references (for completion): ${path.to.value (no closing brace)
@@ -22,9 +25,6 @@ fn incomplete_template_re() -> &'static Regex {
     // Matches ${... without closing brace (for autocompletion while typing)
     INCOMPLETE_TEMPLATE_RE.get_or_init(|| Regex::new(r"\$\{(?P<path>[^}]*)$").expect("invalid regex"))
 }
-
-/// The metadata key used in konf config files
-pub const METADATA_KEY: &str = "<!>";
 
 /// Represents an import with its path and alias
 #[derive(Debug, Clone)]
@@ -239,43 +239,6 @@ fn extract_metadata(yaml: &YamlValue, doc_key: &str) -> KonfMetadata {
         .unwrap_or_default();
 
     KonfMetadata { imports, auth }
-}
-
-/// Resolve a relative path (../, ./) against the current document's directory
-fn resolve_relative_path(doc_key: &str, import_path: &str) -> String {
-    // If not a relative path, return as-is
-    if !import_path.starts_with("../") && !import_path.starts_with("./") {
-        return import_path.to_string();
-    }
-
-    // Get the directory of the current document
-    let doc_dir = if let Some(pos) = doc_key.rfind('/') {
-        &doc_key[..pos]
-    } else {
-        ""
-    };
-
-    // Split into path components
-    let mut components: Vec<&str> = if doc_dir.is_empty() {
-        vec![]
-    } else {
-        doc_dir.split('/').collect()
-    };
-
-    // Process the import path
-    for part in import_path.split('/') {
-        match part {
-            ".." => {
-                components.pop();
-            }
-            "." | "" => {}
-            _ => {
-                components.push(part);
-            }
-        }
-    }
-
-    components.join("/")
 }
 
 /// Extract top-level keys from a YAML document (excluding metadata)
