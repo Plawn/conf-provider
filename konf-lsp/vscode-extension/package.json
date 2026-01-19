@@ -1,0 +1,72 @@
+{
+  "name": "konf-provider",
+  "displayName": "Konf Provider",
+  "description": "Language support for konf-provider YAML configuration files",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "publisher": "konf-provider",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/konf-provider"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/.konf"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "type": "object",
+      "title": "Konf Provider",
+      "properties": {
+        "konf.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the konf-lsp binary. If empty, auto-detects from extension directory or PATH."
+        },
+        "konf.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server."
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "konf-yaml",
+        "aliases": ["Konf YAML", "konf"],
+        "extensions": [".yaml", ".yml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "konf-yaml",
+        "scopeName": "source.konf-yaml",
+        "path": "./syntaxes/konf-yaml.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "bun run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.0.0",
+    "@vscode/vsce": "^2.22.0"
+  }
+}

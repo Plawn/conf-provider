@@ -18,6 +18,7 @@ pub mod local_routes;
 pub mod config;
 pub mod metrics;
 pub mod telemetry;
+pub mod functions;
 /// A configuration entry that holds both raw and rendered versions.
 ///
 /// The `raw` field contains the original parsed configuration, while
@@ -56,7 +57,7 @@ pub struct DagEntry<P: FileProvider> {
 /// This enum provides a format-agnostic representation that can be
 /// loaded from various formats (YAML, JSON, etc.) and serialized
 /// to multiple output formats.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum Value {
     /// A string value.
     String(String),
