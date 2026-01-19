@@ -73,7 +73,7 @@ fn get_template_completions(
             tracing::info!(
                 "FileName completion: partial={:?}, imports={:?}",
                 partial,
-                doc.metadata.imports
+                doc.metadata.imports.keys().collect::<Vec<_>>()
             );
 
             // Calculate the range to replace (the partial text typed so far)
@@ -83,19 +83,19 @@ fn get_template_completions(
                 end: position,
             };
 
-            // Suggest imported files that match the partial
+            // Suggest import aliases that match the partial
             doc.metadata
                 .imports
-                .iter()
-                .filter(|imp| imp.starts_with(&partial))
+                .values()
+                .filter(|imp| imp.alias.starts_with(&partial))
                 .map(|imp| CompletionItem {
-                    label: imp.clone(),
+                    label: imp.alias.clone(),
                     kind: Some(CompletionItemKind::FILE),
-                    detail: Some("Imported config".to_string()),
-                    filter_text: Some(imp.clone()),
+                    detail: Some(format!("-> {}", imp.path)),
+                    filter_text: Some(imp.alias.clone()),
                     text_edit: Some(CompletionTextEdit::Edit(TextEdit {
                         range,
-                        new_text: imp.clone(),
+                        new_text: imp.alias.clone(),
                     })),
                     ..Default::default()
                 })
@@ -113,9 +113,18 @@ fn get_template_completions(
                 partial
             );
 
-            // Get the referenced document
-            let Some(ref_doc) = ws.get_document_by_key(&file_key) else {
-                tracing::warn!("Referenced document not found: {}", file_key);
+            // Find the import info for this alias
+            let Some(import_info) = doc.metadata.imports.get(&file_key) else {
+                tracing::warn!("Import alias not found: {}", file_key);
+                return vec![];
+            };
+
+            // Get the resolved path for the import
+            let resolved_path = import_info.resolved_path.as_ref().unwrap_or(&import_info.path);
+
+            // Get the referenced document using the resolved path
+            let Some(ref_doc) = ws.get_document_by_key(resolved_path) else {
+                tracing::warn!("Referenced document not found: {} (resolved from {})", resolved_path, import_info.path);
                 tracing::info!("Available keys: {:?}", ws.get_all_keys());
                 return vec![];
             };
@@ -171,9 +180,13 @@ fn get_import_completions(
     // Get all available config keys
     let all_keys = ws.get_all_keys();
 
-    // Filter out already imported files and the current file
-    let already_imported: std::collections::HashSet<&str> =
-        doc.metadata.imports.iter().map(|s| s.as_str()).collect();
+    // Filter out already imported files (by resolved path) and the current file
+    let already_imported: std::collections::HashSet<&str> = doc
+        .metadata
+        .imports
+        .values()
+        .filter_map(|info| info.resolved_path.as_deref())
+        .collect();
 
     all_keys
         .into_iter()

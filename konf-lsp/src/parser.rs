@@ -3,6 +3,7 @@
 //! Handles parsing YAML with konf-specific metadata (`<!>` section)
 //! and template references (`${path.to.value}`).
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -25,11 +26,22 @@ fn incomplete_template_re() -> &'static Regex {
 /// The metadata key used in konf config files
 pub const METADATA_KEY: &str = "<!>";
 
+/// Represents an import with its path and alias
+#[derive(Debug, Clone)]
+pub struct ImportInfo {
+    /// The path to the imported file (can be relative: ../common/db or absolute: common/db)
+    pub path: String,
+    /// The alias used in templates (e.g., "db" for ${db.host})
+    pub alias: String,
+    /// The resolved absolute path (after resolving ../ and ./)
+    pub resolved_path: Option<String>,
+}
+
 /// Represents the metadata section of a konf config file
 #[derive(Debug, Clone, Default)]
 pub struct KonfMetadata {
-    /// List of imported config files (without extension)
-    pub imports: Vec<String>,
+    /// Imported config files: alias -> ImportInfo
+    pub imports: HashMap<String, ImportInfo>,
     /// List of auth tokens (git mode only)
     #[allow(dead_code)]
     pub auth: Vec<String>,
@@ -72,7 +84,7 @@ impl KonfDocument {
         let yaml = serde_yaml::from_str::<YamlValue>(&content).ok();
         let metadata = yaml
             .as_ref()
-            .map(extract_metadata)
+            .map(|y| extract_metadata(y, &key))
             .unwrap_or_default();
         let template_refs = find_template_refs(&content);
         let keys = yaml
@@ -160,7 +172,8 @@ pub struct KeyInfo {
 }
 
 /// Extract metadata from a konf YAML document
-fn extract_metadata(yaml: &YamlValue) -> KonfMetadata {
+/// `doc_key` is the key of the current document, used for resolving relative paths
+fn extract_metadata(yaml: &YamlValue, doc_key: &str) -> KonfMetadata {
     let Some(mapping) = yaml.as_mapping() else {
         return KonfMetadata::default();
     };
@@ -173,15 +186,47 @@ fn extract_metadata(yaml: &YamlValue) -> KonfMetadata {
         return KonfMetadata::default();
     };
 
-    let imports = meta_map
-        .get(YamlValue::String("import".to_string()))
-        .and_then(|v| v.as_sequence())
-        .map(|seq| {
-            seq.iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut imports = HashMap::new();
+
+    // Parse imports - can be a mapping (path: alias) or a sequence of strings
+    if let Some(import_value) = meta_map.get(YamlValue::String("import".to_string())) {
+        match import_value {
+            // New format: mapping of path -> alias
+            YamlValue::Mapping(map) => {
+                for (path_val, alias_val) in map {
+                    if let (Some(path), Some(alias)) = (path_val.as_str(), alias_val.as_str()) {
+                        let resolved = resolve_relative_path(doc_key, path);
+                        imports.insert(
+                            alias.to_string(),
+                            ImportInfo {
+                                path: path.to_string(),
+                                alias: alias.to_string(),
+                                resolved_path: Some(resolved),
+                            },
+                        );
+                    }
+                }
+            }
+            // Old format: sequence of strings (path is also the alias)
+            YamlValue::Sequence(seq) => {
+                for v in seq {
+                    if let Some(path) = v.as_str() {
+                        let resolved = resolve_relative_path(doc_key, path);
+                        // Use the path as the alias for backwards compatibility
+                        imports.insert(
+                            path.to_string(),
+                            ImportInfo {
+                                path: path.to_string(),
+                                alias: path.to_string(),
+                                resolved_path: Some(resolved),
+                            },
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 
     let auth = meta_map
         .get(YamlValue::String("auth".to_string()))
@@ -194,6 +239,43 @@ fn extract_metadata(yaml: &YamlValue) -> KonfMetadata {
         .unwrap_or_default();
 
     KonfMetadata { imports, auth }
+}
+
+/// Resolve a relative path (../, ./) against the current document's directory
+fn resolve_relative_path(doc_key: &str, import_path: &str) -> String {
+    // If not a relative path, return as-is
+    if !import_path.starts_with("../") && !import_path.starts_with("./") {
+        return import_path.to_string();
+    }
+
+    // Get the directory of the current document
+    let doc_dir = if let Some(pos) = doc_key.rfind('/') {
+        &doc_key[..pos]
+    } else {
+        ""
+    };
+
+    // Split into path components
+    let mut components: Vec<&str> = if doc_dir.is_empty() {
+        vec![]
+    } else {
+        doc_dir.split('/').collect()
+    };
+
+    // Process the import path
+    for part in import_path.split('/') {
+        match part {
+            ".." => {
+                components.pop();
+            }
+            "." | "" => {}
+            _ => {
+                components.push(part);
+            }
+        }
+    }
+
+    components.join("/")
 }
 
 /// Extract top-level keys from a YAML document (excluding metadata)

@@ -1,6 +1,7 @@
 //! Workspace management for konf-lsp
 //!
 //! Handles indexing and caching of konf config files in the workspace.
+//! Uses `.konf` marker files to determine the root for relative paths.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,11 +12,16 @@ use walkdir::WalkDir;
 
 use crate::parser::KonfDocument;
 
+/// The marker file that indicates a konf config root
+const KONF_MARKER: &str = ".konf";
+
 /// Manages the workspace state and indexed documents
 #[derive(Debug, Default)]
 pub struct Workspace {
-    /// Root folders of the workspace
-    root_folders: Vec<PathBuf>,
+    /// Root folders of the workspace (from VSCode)
+    workspace_folders: Vec<PathBuf>,
+    /// Konf roots (directories containing .konf files)
+    konf_roots: Vec<PathBuf>,
     /// Indexed documents by URI
     documents: HashMap<String, KonfDocument>,
     /// Map from config key to URI (e.g., "common/database" -> "file:///path/to/common/database.yaml")
@@ -35,8 +41,33 @@ impl Workspace {
         };
 
         info!("Adding workspace folder: {}", path.display());
-        self.root_folders.push(path.clone());
+        self.workspace_folders.push(path.clone());
+
+        // Find all .konf marker files in this folder
+        self.find_konf_roots(&path);
+
+        // Index YAML files
         self.index_folder(&path);
+    }
+
+    /// Find all .konf marker files and register their directories as konf roots
+    fn find_konf_roots(&mut self, root: &Path) {
+        for entry in WalkDir::new(root)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+            if path.file_name().is_some_and(|n| n == KONF_MARKER) {
+                if let Some(parent) = path.parent() {
+                    info!("Found konf root: {}", parent.display());
+                    self.konf_roots.push(parent.to_path_buf());
+                }
+            }
+        }
+
+        // Sort by path length descending so we match the most specific root first
+        self.konf_roots.sort_by(|a, b| b.as_os_str().len().cmp(&a.as_os_str().len()));
     }
 
     /// Index all YAML files in a folder
@@ -70,10 +101,22 @@ impl Workspace {
     }
 
     /// Convert a file path to a konf config key
-    /// e.g., /workspace/common/database.yaml -> common/database
+    /// Uses the nearest .konf root as the base for relative paths
+    /// e.g., /workspace/configs/common/database.yaml -> common/database (if .konf is in /workspace/configs)
     fn path_to_key(&self, path: &Path) -> String {
-        // Find which root folder this path belongs to
-        for root in &self.root_folders {
+        // First try to find a konf root that contains this path
+        for konf_root in &self.konf_roots {
+            if let Ok(relative) = path.strip_prefix(konf_root) {
+                let key = relative
+                    .with_extension("")
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                return key;
+            }
+        }
+
+        // Fallback to workspace folder root
+        for root in &self.workspace_folders {
             if let Ok(relative) = path.strip_prefix(root) {
                 let key = relative
                     .with_extension("")
@@ -83,7 +126,7 @@ impl Workspace {
             }
         }
 
-        // Fallback: use filename without extension
+        // Final fallback: use filename without extension
         path.file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("unknown")

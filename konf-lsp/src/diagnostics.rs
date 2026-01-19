@@ -53,46 +53,48 @@ pub fn get_diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
 fn check_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagnostic> {
     let mut diagnostics = vec![];
 
-    // Find the import section in the content
-    for (line_idx, line) in doc.content.lines().enumerate() {
-        let trimmed = line.trim();
+    // Check each import in the metadata
+    for import_info in doc.metadata.imports.values() {
+        let resolved_path = import_info.resolved_path.as_ref().unwrap_or(&import_info.path);
 
-        // Check if this is an import line
-        if trimmed.starts_with("- ")
-            && crate::parser::is_in_import_section(&doc.content, line_idx)
-        {
-            let import_key = trimmed.trim_start_matches("- ").trim();
-
-            // Check if the imported file exists
-            if !ws.has_key(import_key) {
-                let col_start = line.find('-').unwrap_or(0);
-                diagnostics.push(Diagnostic {
-                    range: Range {
-                        start: Position::new(line_idx as u32, col_start as u32),
-                        end: Position::new(line_idx as u32, line.len() as u32),
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("unknown-import".to_string())),
-                    source: Some("konf-lsp".to_string()),
-                    message: format!("Unknown import: '{import_key}'"),
-                    ..Default::default()
-                });
+        // Check if the imported file exists
+        if !ws.has_key(resolved_path) {
+            // Find the line containing this import for error positioning
+            for (line_idx, line) in doc.content.lines().enumerate() {
+                if line.contains(&import_info.path) && crate::parser::is_in_import_section(&doc.content, line_idx) {
+                    diagnostics.push(Diagnostic {
+                        range: Range {
+                            start: Position::new(line_idx as u32, 0),
+                            end: Position::new(line_idx as u32, line.len() as u32),
+                        },
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: Some(NumberOrString::String("unknown-import".to_string())),
+                        source: Some("konf-lsp".to_string()),
+                        message: format!("Unknown import: '{}' (resolved to '{}')", import_info.path, resolved_path),
+                        ..Default::default()
+                    });
+                    break;
+                }
             }
+        }
 
-            // Check for self-import
-            if import_key == doc.key {
-                let col_start = line.find('-').unwrap_or(0);
-                diagnostics.push(Diagnostic {
-                    range: Range {
-                        start: Position::new(line_idx as u32, col_start as u32),
-                        end: Position::new(line_idx as u32, line.len() as u32),
-                    },
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    code: Some(NumberOrString::String("self-import".to_string())),
-                    source: Some("konf-lsp".to_string()),
-                    message: "Cannot import self".to_string(),
-                    ..Default::default()
-                });
+        // Check for self-import
+        if resolved_path == &doc.key {
+            for (line_idx, line) in doc.content.lines().enumerate() {
+                if line.contains(&import_info.path) && crate::parser::is_in_import_section(&doc.content, line_idx) {
+                    diagnostics.push(Diagnostic {
+                        range: Range {
+                            start: Position::new(line_idx as u32, 0),
+                            end: Position::new(line_idx as u32, line.len() as u32),
+                        },
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: Some(NumberOrString::String("self-import".to_string())),
+                        source: Some("konf-lsp".to_string()),
+                        message: "Cannot import self".to_string(),
+                        ..Default::default()
+                    });
+                    break;
+                }
             }
         }
     }
@@ -103,15 +105,14 @@ fn check_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagn
 /// Check that all template references are valid
 fn check_template_refs(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagnostic> {
     let mut diagnostics = vec![];
-    let imported: HashSet<&str> = doc.metadata.imports.iter().map(|s| s.as_str()).collect();
 
     for tref in &doc.template_refs {
-        let Some((file_key, key_path)) = parse_template_path(&tref.path) else {
+        let Some((alias, key_path)) = parse_template_path(&tref.path) else {
             continue;
         };
 
-        // Check if the referenced file is imported
-        if !imported.contains(file_key.as_str()) {
+        // Check if the alias is imported
+        let Some(import_info) = doc.metadata.imports.get(&alias) else {
             diagnostics.push(Diagnostic {
                 range: Range {
                     start: Position::new(tref.line as u32, tref.col_start as u32),
@@ -121,15 +122,18 @@ fn check_template_refs(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec
                 code: Some(NumberOrString::String("unimported-reference".to_string())),
                 source: Some("konf-lsp".to_string()),
                 message: format!(
-                    "Reference to '{file_key}' but it is not imported. Add it to the import section."
+                    "Reference to '{alias}' but it is not imported. Add it to the import section."
                 ),
                 ..Default::default()
             });
             continue;
-        }
+        };
+
+        // Get the resolved path
+        let resolved_path = import_info.resolved_path.as_ref().unwrap_or(&import_info.path);
 
         // Check if the referenced file exists
-        let Some(ref_doc) = ws.get_document_by_key(&file_key) else {
+        let Some(ref_doc) = ws.get_document_by_key(resolved_path) else {
             // Already reported by import check
             continue;
         };
@@ -146,9 +150,10 @@ fn check_template_refs(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec
                 code: Some(NumberOrString::String("unknown-key".to_string())),
                 source: Some("konf-lsp".to_string()),
                 message: format!(
-                    "Key '{}' not found in '{}'",
+                    "Key '{}' not found in '{}' ({})",
                     key_path.join("."),
-                    file_key
+                    alias,
+                    resolved_path
                 ),
                 ..Default::default()
             });
@@ -207,26 +212,26 @@ fn check_circular_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> 
         // Find the import line for the first import in the cycle
         let cycle_str = cycle.join(" -> ");
 
+        // Find any import line to report the error
         for (line_idx, line) in doc.content.lines().enumerate() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("- ")
-                && crate::parser::is_in_import_section(&doc.content, line_idx)
-            {
-                let import_key = trimmed.trim_start_matches("- ").trim();
-                if cycle.contains(&import_key.to_string()) {
-                    let col_start = line.find('-').unwrap_or(0);
-                    diagnostics.push(Diagnostic {
-                        range: Range {
-                            start: Position::new(line_idx as u32, col_start as u32),
-                            end: Position::new(line_idx as u32, line.len() as u32),
-                        },
-                        severity: Some(DiagnosticSeverity::ERROR),
-                        code: Some(NumberOrString::String("circular-import".to_string())),
-                        source: Some("konf-lsp".to_string()),
-                        message: format!("Circular import detected: {cycle_str}"),
-                        ..Default::default()
-                    });
-                    break;
+            if crate::parser::is_in_import_section(&doc.content, line_idx) {
+                // Check if this line contains any path from the cycle
+                for import_info in doc.metadata.imports.values() {
+                    let resolved = import_info.resolved_path.as_ref().unwrap_or(&import_info.path);
+                    if cycle.contains(resolved) && line.contains(&import_info.path) {
+                        diagnostics.push(Diagnostic {
+                            range: Range {
+                                start: Position::new(line_idx as u32, 0),
+                                end: Position::new(line_idx as u32, line.len() as u32),
+                            },
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: Some(NumberOrString::String("circular-import".to_string())),
+                            source: Some("konf-lsp".to_string()),
+                            message: format!("Circular import detected: {cycle_str}"),
+                            ..Default::default()
+                        });
+                        return diagnostics;
+                    }
                 }
             }
         }
@@ -253,9 +258,10 @@ fn detect_cycle(
     visited.insert(key.to_string());
 
     if let Some(doc) = ws.get_document_by_key(key) {
-        for import in &doc.metadata.imports {
-            path.push(import.clone());
-            if let Some(cycle) = detect_cycle(ws, import, visited, path) {
+        for import_info in doc.metadata.imports.values() {
+            let resolved = import_info.resolved_path.as_ref().unwrap_or(&import_info.path);
+            path.push(resolved.clone());
+            if let Some(cycle) = detect_cycle(ws, resolved, visited, path) {
                 return Some(cycle);
             }
             path.pop();
