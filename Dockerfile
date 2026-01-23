@@ -1,5 +1,5 @@
 # Start with a rust alpine image
-FROM rust:1-alpine3.21 AS builder
+FROM rust:1.85-alpine3.21 AS builder
 
 # to update if you want to mount git storage somewhere else
 ENV GIT_DIR=/app/._git_storage

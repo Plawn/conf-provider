@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "konf-provider"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "arc-swap",
