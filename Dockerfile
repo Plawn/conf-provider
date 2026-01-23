@@ -7,7 +7,7 @@ ENV GIT_DIR=/app/._git_storage
 # This is important, see https://github.com/rust-lang/docker-rust/issues/85
 ENV RUSTFLAGS="-C target-feature=-crt-static"
 # if needed, add additional dependencies here
-RUN apk add --no-cache musl-dev libgit2 openssl openssl-dev
+RUN apk add --no-cache musl-dev libgit2 openssl openssl-dev perl make
 # set the workdir and copy the source into it
 WORKDIR /app
 COPY ./Cargo.toml /app
