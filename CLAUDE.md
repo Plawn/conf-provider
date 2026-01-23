@@ -76,3 +76,26 @@ Template syntax uses `${path.to.value}` to reference values from imported files.
 
 - **Local mode** (`LocalAppState`) - Simple filesystem-based serving with hot reload
 - **Git mode** (`GitAppState`) - Serves configs from git repo, caches DAGs per commit in `DashMap`, uses `Authorizer` for token-based access control
+
+### LSP (Language Server Protocol)
+
+The LSP implementation lives in `konf-lsp/` and provides IDE support (autocompletion, diagnostics, go-to-definition) for konf config files.
+
+**IMPORTANT: The LSP MUST reuse core library code whenever possible.** Never duplicate logic that exists in the core library. This is critical because:
+
+1. **Compatibility**: The LSP must behave exactly like the server. If parsing logic differs, the LSP may show incorrect completions or miss errors that the server would catch.
+2. **Single source of truth**: Any bug fix or feature in core should automatically benefit the LSP.
+3. **Accuracy**: The LSP must accurately represent what the server will do with a config file.
+
+Currently shared from core (`konf_provider`):
+- `imports::ImportInfo` - Import declaration structure
+- `imports::parse_imports_from_yaml()` - Parse imports from serde_yaml::Value
+- `imports::METADATA_KEY` - The `<!>` metadata key constant
+- `render_helper::template_re()` - Regex for matching template references `${...}`
+- `render_helper::TemplateRef` - Template reference with position information (line, column)
+- `render_helper::find_template_refs()` - Find all template references in text with positions
+
+When adding new parsing or validation logic:
+1. First implement it in the core library
+2. Export it for use by the LSP
+3. Import and use it in the LSP - do NOT copy/paste or reimplement

@@ -20,6 +20,7 @@
 use std::collections::HashMap;
 
 use crate::Value;
+use serde_yaml::Value as YamlValue;
 
 /// The metadata key used in konf config files
 pub const METADATA_KEY: &str = "<!>";
@@ -31,8 +32,10 @@ pub struct ImportInfo {
     pub path: String,
     /// The alias used in templates (e.g., "db" for ${db.host})
     pub alias: String,
-    /// The resolved absolute path (after resolving ../ and ./)
-    pub resolved_path: String,
+    /// The resolved absolute path (after resolving ../ and ./).
+    /// This is `Some` when the path has been resolved against a document key,
+    /// or `None` when path resolution is not needed (e.g., in LSP context).
+    pub resolved_path: Option<String>,
 }
 
 /// Parse imports from a configuration value.
@@ -80,10 +83,74 @@ pub fn parse_imports(value: &Value, doc_key: &str) -> HashMap<String, ImportInfo
                 ImportInfo {
                     path: path_key.clone(),
                     alias,
-                    resolved_path: resolved,
+                    resolved_path: Some(resolved),
                 },
             );
         }
+    }
+
+    imports
+}
+
+/// Parse imports from a serde_yaml::Value.
+///
+/// This function is useful when working directly with serde_yaml (e.g., in the LSP)
+/// rather than the internal `Value` type.
+///
+/// # Arguments
+/// * `yaml` - The YAML value containing the `<!>` metadata section
+/// * `doc_key` - Optional key of the current document, used for resolving relative paths.
+///   If `None`, `resolved_path` in the returned `ImportInfo` will be `None`.
+///
+/// # Returns
+/// A HashMap mapping alias to ImportInfo
+pub fn parse_imports_from_yaml(
+    yaml: &YamlValue,
+    doc_key: Option<&str>,
+) -> HashMap<String, ImportInfo> {
+    let Some(mapping) = yaml.as_mapping() else {
+        return HashMap::new();
+    };
+
+    let Some(meta) = mapping.get(YamlValue::String(METADATA_KEY.to_string())) else {
+        return HashMap::new();
+    };
+
+    let Some(meta_map) = meta.as_mapping() else {
+        return HashMap::new();
+    };
+
+    let Some(import_value) = meta_map.get(YamlValue::String("import".to_string())) else {
+        return HashMap::new();
+    };
+
+    let Some(import_map) = import_value.as_mapping() else {
+        return HashMap::new();
+    };
+
+    let mut imports = HashMap::new();
+
+    for (path_val, alias_val) in import_map {
+        let Some(path) = path_val.as_str() else {
+            continue;
+        };
+
+        // If alias is a non-empty string, use it; otherwise use the path as alias
+        let alias = match alias_val.as_str() {
+            Some(s) if !s.is_empty() => s.to_string(),
+            _ => path.to_string(), // Null, empty string, or other → use path as alias
+        };
+
+        let resolved_path = doc_key.map(|key| resolve_relative_path(key, path));
+
+        imports.insert(
+            alias.clone(),
+            ImportInfo {
+                path: path.to_string(),
+                alias,
+                resolved_path,
+            },
+        );
     }
 
     imports
@@ -95,7 +162,7 @@ pub fn parse_imports(value: &Value, doc_key: &str) -> HashMap<String, ImportInfo
 pub fn get_import_paths(value: &Value, doc_key: &str) -> Vec<String> {
     parse_imports(value, doc_key)
         .values()
-        .map(|info| info.resolved_path.clone())
+        .filter_map(|info| info.resolved_path.clone())
         .collect()
 }
 
@@ -232,12 +299,12 @@ mod tests {
         let db_import = imports.get("common/database").unwrap();
         assert_eq!(db_import.path, "common/database");
         assert_eq!(db_import.alias, "common/database");
-        assert_eq!(db_import.resolved_path, "common/database");
+        assert_eq!(db_import.resolved_path, Some("common/database".to_string()));
 
         let redis_import = imports.get("common/redis").unwrap();
         assert_eq!(redis_import.path, "common/redis");
         assert_eq!(redis_import.alias, "common/redis");
-        assert_eq!(redis_import.resolved_path, "common/redis");
+        assert_eq!(redis_import.resolved_path, Some("common/redis".to_string()));
     }
 
     #[test]
@@ -260,12 +327,12 @@ mod tests {
         let db_import = imports.get("db").unwrap();
         assert_eq!(db_import.path, "common/database");
         assert_eq!(db_import.alias, "db");
-        assert_eq!(db_import.resolved_path, "common/database");
+        assert_eq!(db_import.resolved_path, Some("common/database".to_string()));
 
         let cache_import = imports.get("cache").unwrap();
         assert_eq!(cache_import.path, "common/redis");
         assert_eq!(cache_import.alias, "cache");
-        assert_eq!(cache_import.resolved_path, "common/redis");
+        assert_eq!(cache_import.resolved_path, Some("common/redis".to_string()));
     }
 
     #[test]
@@ -287,11 +354,11 @@ mod tests {
 
         let db_import = imports.get("db").unwrap();
         assert_eq!(db_import.path, "../common/database");
-        assert_eq!(db_import.resolved_path, "common/database");
+        assert_eq!(db_import.resolved_path, Some("common/database".to_string()));
 
         let cfg_import = imports.get("cfg").unwrap();
         assert_eq!(cfg_import.path, "./config");
-        assert_eq!(cfg_import.resolved_path, "services/config");
+        assert_eq!(cfg_import.resolved_path, Some("services/config".to_string()));
     }
 
     #[test]
@@ -329,5 +396,69 @@ mod tests {
         assert_eq!(paths.len(), 2);
         assert!(paths.contains(&"common/database".to_string()));
         assert!(paths.contains(&"common/redis".to_string()));
+    }
+
+    #[test]
+    fn test_parse_imports_from_yaml_with_doc_key() {
+        let yaml: YamlValue = serde_yaml::from_str(
+            r#"
+<!>:
+  import:
+    common/database: db
+    ../shared/redis: cache
+service:
+  name: test
+"#,
+        )
+        .unwrap();
+
+        let imports = parse_imports_from_yaml(&yaml, Some("services/api"));
+
+        assert_eq!(imports.len(), 2);
+
+        let db_import = imports.get("db").unwrap();
+        assert_eq!(db_import.path, "common/database");
+        assert_eq!(db_import.alias, "db");
+        assert_eq!(db_import.resolved_path, Some("common/database".to_string()));
+
+        let cache_import = imports.get("cache").unwrap();
+        assert_eq!(cache_import.path, "../shared/redis");
+        assert_eq!(cache_import.alias, "cache");
+        assert_eq!(cache_import.resolved_path, Some("shared/redis".to_string()));
+    }
+
+    #[test]
+    fn test_parse_imports_from_yaml_without_doc_key() {
+        let yaml: YamlValue = serde_yaml::from_str(
+            r#"
+<!>:
+  import:
+    common/database: db
+    common/redis:
+"#,
+        )
+        .unwrap();
+
+        let imports = parse_imports_from_yaml(&yaml, None);
+
+        assert_eq!(imports.len(), 2);
+
+        let db_import = imports.get("db").unwrap();
+        assert_eq!(db_import.path, "common/database");
+        assert_eq!(db_import.alias, "db");
+        assert_eq!(db_import.resolved_path, None);
+
+        // Null alias uses path as alias
+        let redis_import = imports.get("common/redis").unwrap();
+        assert_eq!(redis_import.path, "common/redis");
+        assert_eq!(redis_import.alias, "common/redis");
+        assert_eq!(redis_import.resolved_path, None);
+    }
+
+    #[test]
+    fn test_parse_imports_from_yaml_empty() {
+        let yaml: YamlValue = serde_yaml::from_str("service: test").unwrap();
+        let imports = parse_imports_from_yaml(&yaml, Some("test"));
+        assert!(imports.is_empty());
     }
 }

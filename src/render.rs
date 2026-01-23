@@ -94,7 +94,7 @@ impl<P: FileProvider> Dag<P> {
                 // Collect resolved paths for loading dependencies
                 let resolved_paths: Vec<String> = import_infos
                     .values()
-                    .map(|info| info.resolved_path.clone())
+                    .filter_map(|info| info.resolved_path.clone())
                     .collect();
 
                 // Load all dependencies by their resolved paths

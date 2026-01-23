@@ -10,31 +10,15 @@ use regex::Regex;
 use serde_yaml::Value as YamlValue;
 
 // Re-use utilities from the base lib
-pub use konf_provider::imports::{resolve_relative_path, METADATA_KEY};
+pub use konf_provider::imports::{parse_imports_from_yaml, ImportInfo, METADATA_KEY};
+pub use konf_provider::render_helper::{find_template_refs, template_re, TemplateRef};
 
-/// Regex for template references: ${path.to.value}
-static TEMPLATE_RE: OnceLock<Regex> = OnceLock::new();
 /// Regex for incomplete template references (for completion): ${path.to.value (no closing brace)
 static INCOMPLETE_TEMPLATE_RE: OnceLock<Regex> = OnceLock::new();
-
-fn template_re() -> &'static Regex {
-    TEMPLATE_RE.get_or_init(|| Regex::new(r"\$\{(?P<path>[^}]+)\}").expect("invalid regex"))
-}
 
 fn incomplete_template_re() -> &'static Regex {
     // Matches ${... without closing brace (for autocompletion while typing)
     INCOMPLETE_TEMPLATE_RE.get_or_init(|| Regex::new(r"\$\{(?P<path>[^}]*)$").expect("invalid regex"))
-}
-
-/// Represents an import with its path and alias
-#[derive(Debug, Clone)]
-pub struct ImportInfo {
-    /// The path to the imported file (can be relative: ../common/db or absolute: common/db)
-    pub path: String,
-    /// The alias used in templates (e.g., "db" for ${db.host})
-    pub alias: String,
-    /// The resolved absolute path (after resolving ../ and ./)
-    pub resolved_path: Option<String>,
 }
 
 /// Represents the metadata section of a konf config file
@@ -65,18 +49,6 @@ pub struct KonfDocument {
     pub keys: Vec<String>,
 }
 
-/// A template reference found in the document
-#[derive(Debug, Clone)]
-pub struct TemplateRef {
-    /// The full reference path (e.g., "common/database.host")
-    pub path: String,
-    /// Line number (0-indexed)
-    pub line: usize,
-    /// Column start (0-indexed)
-    pub col_start: usize,
-    /// Column end (0-indexed)
-    pub col_end: usize,
-}
 
 impl KonfDocument {
     /// Parse a konf YAML document
@@ -234,47 +206,13 @@ pub struct KeyInfo {
 /// Extract metadata from a konf YAML document
 /// `doc_key` is the key of the current document, used for resolving relative paths
 fn extract_metadata(yaml: &YamlValue, doc_key: &str) -> KonfMetadata {
-    let Some(mapping) = yaml.as_mapping() else {
-        return KonfMetadata::default();
-    };
+    let imports = parse_imports_from_yaml(yaml, Some(doc_key));
 
-    let Some(meta) = mapping.get(YamlValue::String(METADATA_KEY.to_string())) else {
-        return KonfMetadata::default();
-    };
-
-    let Some(meta_map) = meta.as_mapping() else {
-        return KonfMetadata::default();
-    };
-
-    let mut imports = HashMap::new();
-
-    // Parse imports - mapping of path -> alias
-    // If alias is null or empty, the path is used as the alias
-    if let Some(import_value) = meta_map.get(YamlValue::String("import".to_string())) {
-        if let YamlValue::Mapping(map) = import_value {
-            for (path_val, alias_val) in map {
-                if let Some(path) = path_val.as_str() {
-                    // If alias is a non-empty string, use it; otherwise use the path as alias
-                    let alias = match alias_val.as_str() {
-                        Some(s) if !s.is_empty() => s.to_string(),
-                        _ => path.to_string(), // Null, empty string, or other → use path as alias
-                    };
-                    let resolved = resolve_relative_path(doc_key, path);
-                    imports.insert(
-                        alias.clone(),
-                        ImportInfo {
-                            path: path.to_string(),
-                            alias,
-                            resolved_path: Some(resolved),
-                        },
-                    );
-                }
-            }
-        }
-    }
-
-    let auth = meta_map
-        .get(YamlValue::String("auth".to_string()))
+    let auth = yaml
+        .as_mapping()
+        .and_then(|m| m.get(YamlValue::String(METADATA_KEY.to_string())))
+        .and_then(|v| v.as_mapping())
+        .and_then(|m| m.get(YamlValue::String("auth".to_string())))
         .and_then(|v| v.as_sequence())
         .map(|seq| {
             seq.iter()
@@ -305,26 +243,6 @@ fn extract_top_level_keys(yaml: &YamlValue) -> Vec<String> {
         .collect()
 }
 
-/// Find all template references in the content
-fn find_template_refs(content: &str) -> Vec<TemplateRef> {
-    let mut refs = vec![];
-
-    for (line_idx, line) in content.lines().enumerate() {
-        for cap in template_re().captures_iter(line) {
-            if let Some(path_match) = cap.name("path") {
-                let full_match = cap.get(0).unwrap();
-                refs.push(TemplateRef {
-                    path: path_match.as_str().to_string(),
-                    line: line_idx,
-                    col_start: full_match.start(),
-                    col_end: full_match.end(),
-                });
-            }
-        }
-    }
-
-    refs
-}
 
 /// Get a human-readable type name for a YAML value
 fn value_type_name(value: &YamlValue) -> String {
@@ -383,11 +301,11 @@ pub fn parse_template_path(path: &str) -> Option<(String, Vec<String>)> {
 pub fn get_template_at_position(content: &str, line: usize, col: usize) -> Option<TemplateContext> {
     let line_content = content.lines().nth(line)?;
 
-    // First check complete templates: ${path}
+    // First check complete templates: ${content}
     for cap in template_re().captures_iter(line_content) {
         let full_match = cap.get(0)?;
         if col >= full_match.start() && col <= full_match.end() {
-            let path = cap.name("path")?.as_str();
+            let path = cap.name("content")?.as_str();
             let path_start = full_match.start() + 2; // after "${"
             let cursor_in_path = col.saturating_sub(path_start);
 

@@ -24,6 +24,70 @@ fn interpolation_re() -> &'static Regex {
         .get_or_init(|| Regex::new(r"\$\{(?P<content>[^}]+)\}").expect("invalid regex"))
 }
 
+/// Returns the regex for matching template references: ${path.to.value}
+///
+/// This regex matches template placeholders like `${some.path}` and captures
+/// the content inside the braces in a named group called "content".
+///
+/// Useful for LSP and other tools that need to find template references in text.
+pub fn template_re() -> &'static Regex {
+    interpolation_re()
+}
+
+/// A template reference found in a document, with position information.
+///
+/// This is useful for LSP features (diagnostics, go-to-definition) and
+/// for providing detailed error messages with line/column information.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateRef {
+    /// The content inside the template (e.g., "common/database.host" from "${common/database.host}")
+    pub path: String,
+    /// Line number (0-indexed)
+    pub line: usize,
+    /// Column where the template starts (0-indexed, points to '$')
+    pub col_start: usize,
+    /// Column where the template ends (0-indexed, points after '}')
+    pub col_end: usize,
+}
+
+/// Find all template references in text content with their positions.
+///
+/// Scans the content line by line and returns all `${...}` template references
+/// with their positions (line, column start, column end).
+///
+/// # Example
+/// ```
+/// use konf_provider::render_helper::find_template_refs;
+///
+/// let content = "host: ${db.host}\nport: ${db.port}";
+/// let refs = find_template_refs(content);
+///
+/// assert_eq!(refs.len(), 2);
+/// assert_eq!(refs[0].path, "db.host");
+/// assert_eq!(refs[0].line, 0);
+/// assert_eq!(refs[1].path, "db.port");
+/// assert_eq!(refs[1].line, 1);
+/// ```
+pub fn find_template_refs(content: &str) -> Vec<TemplateRef> {
+    let mut refs = vec![];
+
+    for (line_idx, line) in content.lines().enumerate() {
+        for cap in template_re().captures_iter(line) {
+            if let Some(content_match) = cap.name("content") {
+                let full_match = cap.get(0).unwrap();
+                refs.push(TemplateRef {
+                    path: content_match.as_str().to_string(),
+                    line: line_idx,
+                    col_start: full_match.start(),
+                    col_end: full_match.end(),
+                });
+            }
+        }
+    }
+
+    refs
+}
+
 fn placeholder_content_re() -> &'static Regex {
     PLACEHOLDER_CONTENT_RE.get_or_init(|| {
         // Matches: "path.to.value" or "path.to.value | func1 | func2:arg"
