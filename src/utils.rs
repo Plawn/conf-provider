@@ -29,12 +29,7 @@ impl fmt::Display for MyError {
     }
 }
 
-impl error::Error for MyError {
-    // necessary for providing backtrace to xitca_web::error::Error instance.
-    fn provide<'a>(&'a self, request: &mut error::Request<'a>) {
-        request.provide_ref(&self.0);
-    }
-}
+impl error::Error for MyError {}
 
 // Error<C> is the main error type xitca-web uses and at some point MyError would
 // need to be converted to it.
@@ -90,15 +85,9 @@ where
                     .await;
             }
 
-            // below are error handling feature only enabled by using nightly rust.
-
-            // utilize std::error module for backtrace and more advanced error info.
-            let report = error::Report::new(&e).pretty(true).show_backtrace(true);
-            // display error report
-            tracing::error!("{report}");
-
             // the most basic error handling is to ignore it and return as is. xitca-web is able to take care
             // of error by utilizing it's according trait implements(Debug,Display,Error and Service impls)
+            tracing::error!("{e}");
             Err(e)
         }
     }
@@ -155,12 +144,7 @@ impl fmt::Display for GetError {
     }
 }
 
-impl error::Error for GetError {
-    // necessary for providing backtrace to xitca_web::error::Error instance.
-    fn provide<'a>(&'a self, request: &mut error::Request<'a>) {
-        request.provide_ref(self);
-    }
-}
+impl error::Error for GetError {}
 
 // Error<C> is the main error type xitca-web uses and at some point MyError would
 // need to be converted to it.

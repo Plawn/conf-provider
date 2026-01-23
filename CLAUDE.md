@@ -5,33 +5,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run Commands
 
 ```bash
-# Build the project (requires nightly Rust for edition 2024)
-cargo +nightly build
+# Build the project
+cargo build
 
 # Build release
-cargo +nightly build --release
+cargo build --release
 
 # Run linter
-cargo +nightly clippy
+cargo clippy
 
 # Run the server in local mode (serves config from filesystem)
-cargo +nightly run --bin server -- local --folder /path/to/configs [--port 4000]
+cargo run --bin server -- local --folder /path/to/configs [--port 4000]
 
 # Run the server in git mode (serves config from git repository)
-cargo +nightly run --bin server -- git --repo-url <url> --branch <branch> [--username <user> --password <pass>] [--port 4000]
+cargo run --bin server -- git --repo-url <url> --branch <branch> [--username <user> --password <pass>] [--port 4000]
 
 # Port can also be set via environment variable
-KONF_PORT=8080 cargo +nightly run --bin server -- local --folder /path/to/configs
+KONF_PORT=8080 cargo run --bin server -- local --folder /path/to/configs
 
 # Build the cache helper binary
-cargo +nightly build --bin cache
+cargo build --bin cache
+
+# Build the unified dev CLI (render + LSP)
+cargo build --bin konf
 
 # Render a config file locally (for testing before pushing)
-cargo +nightly run --bin render -- -f /path/to/configs -n myconfig
-cargo +nightly run --bin render -- -f /path/to/configs -n myconfig -o json
-cargo +nightly run --bin render -- -f /path/to/configs -n myconfig -o env
+cargo run --bin konf -- render -f /path/to/configs -n myconfig
+cargo run --bin konf -- render -f /path/to/configs -n myconfig -o json
+cargo run --bin konf -- render -f /path/to/configs -n myconfig -o env
 
 # Available output formats: yaml (default), json, env, properties, toml, docker_env
+
+# Start the LSP server (for IDE integration)
+cargo run --bin konf -- lsp
 ```
 
 ## Architecture
@@ -79,7 +85,7 @@ Template syntax uses `${path.to.value}` to reference values from imported files.
 
 ### LSP (Language Server Protocol)
 
-The LSP implementation lives in `konf-lsp/` and provides IDE support (autocompletion, diagnostics, go-to-definition) for konf config files.
+The LSP implementation lives in `src/lsp/` (integrated into the main library) and provides IDE support (autocompletion, diagnostics, go-to-definition) for konf config files. It's bundled with the `konf` CLI binary for simplified distribution.
 
 **IMPORTANT: The LSP MUST reuse core library code whenever possible.** Never duplicate logic that exists in the core library. This is critical because:
 

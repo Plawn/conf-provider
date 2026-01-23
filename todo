@@ -1,3 +1,2 @@
 - refactore
 - mettre render cli et lsp dans le même binaire pour simplifier la distrib
-- clean les imports du lsp et core pour pas avoir de doublons

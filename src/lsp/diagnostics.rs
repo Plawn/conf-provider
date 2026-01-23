@@ -10,8 +10,8 @@ use std::collections::HashSet;
 
 use tower_lsp::lsp_types::*;
 
-use crate::parser::parse_template_path;
-use crate::workspace::Workspace;
+use super::parser::parse_template_path;
+use super::workspace::Workspace;
 
 /// Get diagnostics for a document
 pub fn get_diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
@@ -50,7 +50,7 @@ pub fn get_diagnostics(ws: &Workspace, uri: &Url) -> Vec<Diagnostic> {
 }
 
 /// Check that all imports reference valid files
-fn check_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagnostic> {
+fn check_imports(ws: &Workspace, doc: &super::parser::KonfDocument) -> Vec<Diagnostic> {
     let mut diagnostics = vec![];
 
     // Check each import in the metadata
@@ -61,7 +61,7 @@ fn check_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagn
         if !ws.has_key(resolved_path) {
             // Find the line containing this import for error positioning
             for (line_idx, line) in doc.content.lines().enumerate() {
-                if line.contains(&import_info.path) && crate::parser::is_in_import_section(&doc.content, line_idx) {
+                if line.contains(&import_info.path) && super::parser::is_in_import_section(&doc.content, line_idx) {
                     diagnostics.push(Diagnostic {
                         range: Range {
                             start: Position::new(line_idx as u32, 0),
@@ -81,7 +81,7 @@ fn check_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagn
         // Check for self-import
         if resolved_path == &doc.key {
             for (line_idx, line) in doc.content.lines().enumerate() {
-                if line.contains(&import_info.path) && crate::parser::is_in_import_section(&doc.content, line_idx) {
+                if line.contains(&import_info.path) && super::parser::is_in_import_section(&doc.content, line_idx) {
                     diagnostics.push(Diagnostic {
                         range: Range {
                             start: Position::new(line_idx as u32, 0),
@@ -103,7 +103,7 @@ fn check_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagn
 }
 
 /// Check that all template references are valid
-fn check_template_refs(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagnostic> {
+fn check_template_refs(ws: &Workspace, doc: &super::parser::KonfDocument) -> Vec<Diagnostic> {
     let mut diagnostics = vec![];
 
     for tref in &doc.template_refs {
@@ -203,7 +203,7 @@ fn check_template_refs(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec
 }
 
 /// Check for circular imports
-fn check_circular_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> Vec<Diagnostic> {
+fn check_circular_imports(ws: &Workspace, doc: &super::parser::KonfDocument) -> Vec<Diagnostic> {
     let mut diagnostics = vec![];
     let mut visited = HashSet::new();
     let mut path = vec![doc.key.clone()];
@@ -214,7 +214,7 @@ fn check_circular_imports(ws: &Workspace, doc: &crate::parser::KonfDocument) -> 
 
         // Find any import line to report the error
         for (line_idx, line) in doc.content.lines().enumerate() {
-            if crate::parser::is_in_import_section(&doc.content, line_idx) {
+            if super::parser::is_in_import_section(&doc.content, line_idx) {
                 // Check if this line contains any path from the cycle
                 for import_info in doc.metadata.imports.values() {
                     let resolved = import_info.resolved_path.as_ref().unwrap_or(&import_info.path);

@@ -36,3 +36,64 @@ build:
 # Build release
 build-release:
     cargo +nightly build --release
+
+# Get current version from Cargo.toml
+version:
+    @grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'
+
+# Bump patch version (0.1.0 -> 0.1.1), commit, tag and push
+bump-patch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    IFS='.' read -r major minor patch <<< "$current"
+    new_version="$major.$minor.$((patch + 1))"
+    if git rev-parse "v$new_version" >/dev/null 2>&1; then
+        echo "Error: tag v$new_version already exists" >&2
+        exit 1
+    fi
+    sed -i.bak "s/^version = \"$current\"/version = \"$new_version\"/" Cargo.toml
+    rm -f Cargo.toml.bak
+    git add Cargo.toml
+    git commit -m "chore: bump version to v$new_version"
+    git tag "v$new_version"
+    git push && git push --tags
+    echo "Released v$new_version"
+
+# Bump minor version (0.1.0 -> 0.2.0), commit, tag and push
+bump-minor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    IFS='.' read -r major minor patch <<< "$current"
+    new_version="$major.$((minor + 1)).0"
+    if git rev-parse "v$new_version" >/dev/null 2>&1; then
+        echo "Error: tag v$new_version already exists" >&2
+        exit 1
+    fi
+    sed -i.bak "s/^version = \"$current\"/version = \"$new_version\"/" Cargo.toml
+    rm -f Cargo.toml.bak
+    git add Cargo.toml
+    git commit -m "chore: bump version to v$new_version"
+    git tag "v$new_version"
+    git push && git push --tags
+    echo "Released v$new_version"
+
+# Bump major version (0.1.0 -> 1.0.0), commit, tag and push
+bump-major:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+    IFS='.' read -r major minor patch <<< "$current"
+    new_version="$((major + 1)).0.0"
+    if git rev-parse "v$new_version" >/dev/null 2>&1; then
+        echo "Error: tag v$new_version already exists" >&2
+        exit 1
+    fi
+    sed -i.bak "s/^version = \"$current\"/version = \"$new_version\"/" Cargo.toml
+    rm -f Cargo.toml.bak
+    git add Cargo.toml
+    git commit -m "chore: bump version to v$new_version"
+    git tag "v$new_version"
+    git push && git push --tags
+    echo "Released v$new_version"

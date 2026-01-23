@@ -72,9 +72,9 @@ pub fn init_tracing(config: TelemetryConfig) -> Option<TracerProvider> {
 
 /// Shutdown the tracer provider gracefully.
 pub fn shutdown_tracing(provider: Option<TracerProvider>) {
-    if let Some(provider) = provider
-        && let Err(e) = provider.shutdown()
-    {
-        tracing::error!("Failed to shutdown tracer provider: {:?}", e);
+    if let Some(provider) = provider {
+        if let Err(e) = provider.shutdown() {
+            tracing::error!("Failed to shutdown tracer provider: {:?}", e);
+        }
     }
 }

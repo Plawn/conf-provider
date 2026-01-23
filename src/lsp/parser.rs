@@ -10,8 +10,8 @@ use regex::Regex;
 use serde_yaml::Value as YamlValue;
 
 // Re-use utilities from the base lib
-pub use konf_provider::imports::{parse_imports_from_yaml, ImportInfo, METADATA_KEY};
-pub use konf_provider::render_helper::{find_template_refs, template_re, TemplateRef};
+pub use crate::imports::{parse_imports_from_yaml, ImportInfo, METADATA_KEY};
+pub use crate::render_helper::{find_template_refs, template_re, TemplateRef};
 
 /// Regex for incomplete template references (for completion): ${path.to.value (no closing brace)
 static INCOMPLETE_TEMPLATE_RE: OnceLock<Regex> = OnceLock::new();

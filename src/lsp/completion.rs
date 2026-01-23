@@ -6,10 +6,10 @@
 
 use tower_lsp::lsp_types::*;
 
-use crate::parser::{
+use super::parser::{
     get_template_at_position, is_in_import_section, parse_template_path, CompletionContext,
 };
-use crate::workspace::Workspace;
+use super::workspace::Workspace;
 
 /// Get completion items for the current position
 pub fn get_completions(ws: &Workspace, uri: &Url, position: Position) -> Vec<CompletionItem> {
@@ -64,7 +64,7 @@ pub fn get_completions(ws: &Workspace, uri: &Url, position: Position) -> Vec<Com
 /// Get completions for template references
 fn get_template_completions(
     ws: &Workspace,
-    doc: &crate::parser::KonfDocument,
+    doc: &super::parser::KonfDocument,
     ctx: CompletionContext,
     position: Position,
 ) -> Vec<CompletionItem> {
@@ -180,7 +180,7 @@ fn get_template_completions(
 /// Get completions for import paths
 fn get_import_completions(
     ws: &Workspace,
-    doc: &crate::parser::KonfDocument,
+    doc: &super::parser::KonfDocument,
 ) -> Vec<CompletionItem> {
     // Get all available config keys
     let all_keys = ws.get_all_keys();

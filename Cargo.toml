@@ -32,6 +32,8 @@ toml = "0.9.5"
 regex = "1.11.2"
 urlencoding = "2.1"
 base64 = "0.22"
+walkdir = "2"
+tower-lsp = "0.20"
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
 tracing-opentelemetry = "0.28"
@@ -53,11 +55,10 @@ codegen-units = 1
 name = "cache"
 path = "src/cache_helper.rs"
 
-
 [[bin]]
 name = "server"
 path = "src/main.rs"
 
 [[bin]]
-name = "render"
-path = "src/render_cli.rs"
+name = "konf"
+path = "src/cli.rs"

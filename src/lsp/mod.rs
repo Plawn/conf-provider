@@ -1,3 +1,7 @@
+//! LSP (Language Server Protocol) module for konf-provider
+//!
+//! Provides IDE support (autocompletion, diagnostics, go-to-definition) for konf config files.
+
 mod completion;
 mod diagnostics;
 mod parser;
@@ -180,13 +184,13 @@ impl KonfLsp {
     }
 }
 
-#[tokio::main]
-async fn main() {
+/// Run the LSP server
+pub async fn run_lsp() {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("konf_lsp=info".parse().unwrap()),
+                .add_directive("konf_provider::lsp=info".parse().unwrap()),
         )
         .with_writer(std::io::stderr)
         .init();

@@ -137,15 +137,15 @@ impl FileProvider for GitFileProvider {
             // Walk the tree of files recursively
             let _ = tree.walk(git2::TreeWalkMode::PostOrder, |root, entry| {
                 // We only care about files (blobs), not directories
-                if entry.kind() == Some(git2::ObjectType::Blob)
-                    && let Some(filename) = entry.name()
-                {
-                    let relative_path = Path::new(root).join(filename);
-                    let full_path_str = relative_path.to_string_lossy().into_owned();
-                    if let Some(dir_entry) =
-                        DirEntry::from_relative_path(&relative_path, &full_path_str)
-                    {
-                        entries.push(dir_entry);
+                if entry.kind() == Some(git2::ObjectType::Blob) {
+                    if let Some(filename) = entry.name() {
+                        let relative_path = Path::new(root).join(filename);
+                        let full_path_str = relative_path.to_string_lossy().into_owned();
+                        if let Some(dir_entry) =
+                            DirEntry::from_relative_path(&relative_path, &full_path_str)
+                        {
+                            entries.push(dir_entry);
+                        }
                     }
                 }
                 git2::TreeWalkResult::Ok

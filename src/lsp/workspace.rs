@@ -10,7 +10,7 @@ use tower_lsp::lsp_types::Url;
 use tracing::{info, warn};
 use walkdir::WalkDir;
 
-use crate::parser::KonfDocument;
+use super::parser::KonfDocument;
 
 /// The marker file that indicates a konf config root
 const KONF_MARKER: &str = ".konf";

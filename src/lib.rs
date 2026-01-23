@@ -1,4 +1,3 @@
-#![feature(error_generic_member_access, error_reporter)]
 use std::collections::HashMap;
 
 use async_once_cell::OnceCell;
@@ -20,6 +19,7 @@ pub mod metrics;
 pub mod telemetry;
 pub mod functions;
 pub mod imports;
+pub mod lsp;
 /// A configuration entry that holds both raw and rendered versions.
 ///
 /// The `raw` field contains the original parsed configuration, while
