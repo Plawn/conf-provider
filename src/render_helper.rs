@@ -233,16 +233,16 @@ pub fn resolve_refs_from_deps(value: &mut Value, deps: &HashMap<String, Value>) 
             // Case 1: The entire string is a single placeholder, like "${a.b.c}" or "${a.b.c | func}".
             // In this case, we replace the string with the referenced value, preserving its type.
             if let Some(caps) = exact_match_re().captures(s) {
-                if let Some(content) = caps.name("content") {
-                    if let Some(result) = resolve_placeholder_expression(content.as_str(), deps) {
-                        match result {
-                            Ok(replacement) => {
-                                *value = replacement;
-                            }
-                            Err(e) => {
-                                // Log error but leave placeholder unchanged
-                                tracing::warn!("Function error in placeholder: {}", e);
-                            }
+                if let Some(content) = caps.name("content")
+                    && let Some(result) = resolve_placeholder_expression(content.as_str(), deps)
+                {
+                    match result {
+                        Ok(replacement) => {
+                            *value = replacement;
+                        }
+                        Err(e) => {
+                            // Log error but leave placeholder unchanged
+                            tracing::warn!("Function error in placeholder: {}", e);
                         }
                     }
                 }

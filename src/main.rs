@@ -59,9 +59,12 @@ enum Args {
 }
 
 fn make_git_creds(username: Option<String>, password: Option<String>) -> Option<Creds> {
-    match (username, password) {
-        (Some(u), Some(p)) => Some(Creds::new(u, p)),
-        _ => None,
+    if let Some(u) = username
+        && let Some(p) = password
+    {
+        Some(Creds::new(u, p))
+    } else {
+        None
     }
 }
 

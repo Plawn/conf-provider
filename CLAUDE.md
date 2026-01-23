@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Run Commands
 
+Requires Rust 1.85+ (edition 2024).
+
 ```bash
 # Build the project
 cargo build
