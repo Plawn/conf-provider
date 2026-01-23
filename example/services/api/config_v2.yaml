@@ -1,0 +1,15 @@
+# Config using new import format with aliases and relative paths
+<!>:
+  import:
+    ../../common/database: db
+    ../../common/redis: cache
+
+service:
+  name: api-service-v2
+  port: 8081
+
+database:
+  url: postgres://${db.user}:${db.password}@${db.host}:${db.port}/${db.name}
+
+cache:
+  url: redis://${cache.host}:${cache.port}/${cache.db}

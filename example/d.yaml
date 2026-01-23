@@ -1,0 +1,17 @@
+# Config using new import format with aliases
+<!>:
+  import:
+    common/database: db
+    common/redis: cache
+
+service:
+  name: service-d
+
+# Using aliased imports in templates
+db_host: ${db.host}
+db_port: ${db.port}
+cache_host: ${cache.host}
+cache_port: ${cache.port}
+
+# Combined usage
+connection_string: "postgres://${db.user}@${db.host}:${db.port}/${db.name}"

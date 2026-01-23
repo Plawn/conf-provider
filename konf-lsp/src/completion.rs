@@ -112,10 +112,15 @@ fn get_template_completions(
                 key_path,
                 partial
             );
+            tracing::info!(
+                "Document key: {:?}, imports: {:?}",
+                doc.key,
+                doc.metadata.imports.iter().map(|(k, v)| (k, &v.path, &v.resolved_path)).collect::<Vec<_>>()
+            );
 
             // Find the import info for this alias
             let Some(import_info) = doc.metadata.imports.get(&file_key) else {
-                tracing::warn!("Import alias not found: {}", file_key);
+                tracing::warn!("Import alias '{}' not found in imports: {:?}", file_key, doc.metadata.imports.keys().collect::<Vec<_>>());
                 return vec![];
             };
 
@@ -211,17 +216,30 @@ pub fn goto_definition(ws: &Workspace, uri: &Url, position: Position) -> Option<
 
     // Check if cursor is on a template reference
     if let Some(ctx) = get_template_at_position(&doc.content, line, col) {
-        let (file_key, _key_path) = parse_template_path(&ctx.full_path)?;
+        let (file_key, key_path) = parse_template_path(&ctx.full_path)?;
 
-        // Find the referenced file
-        let target_uri = ws.get_uri_for_key(&file_key)?;
+        // file_key is the alias - resolve it to the actual path
+        let resolved_path = if let Some(import_info) = doc.metadata.imports.get(&file_key) {
+            import_info.resolved_path.as_ref().unwrap_or(&import_info.path).clone()
+        } else {
+            // Fallback: maybe it's already a direct path (old format)
+            file_key
+        };
+
+        // Find the referenced file using resolved path
+        let target_uri = ws.get_uri_for_key(&resolved_path)?;
         let target_url = Url::parse(target_uri).ok()?;
+
+        // Find the exact position of the key in the target file
+        let ref_doc = ws.get_document_by_key(&resolved_path)?;
+        let path_refs: Vec<&str> = key_path.iter().map(|s| s.as_str()).collect();
+        let (target_line, target_col) = ref_doc.find_key_position(&path_refs).unwrap_or((0, 0));
 
         return Some(Location {
             uri: target_url,
             range: Range {
-                start: Position::new(0, 0),
-                end: Position::new(0, 0),
+                start: Position::new(target_line, target_col),
+                end: Position::new(target_line, target_col),
             },
         });
     }
@@ -257,8 +275,23 @@ pub fn hover(ws: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
     if let Some(ctx) = get_template_at_position(&doc.content, line, col) {
         let (file_key, key_path) = parse_template_path(&ctx.full_path)?;
 
-        // Find the referenced document
-        let ref_doc = ws.get_document_by_key(&file_key)?;
+        // file_key is the alias - resolve it to the actual path
+        let (resolved_path, display_name) = if let Some(import_info) = doc.metadata.imports.get(&file_key) {
+            let resolved = import_info.resolved_path.as_ref().unwrap_or(&import_info.path).clone();
+            // Show alias -> resolved path in hover
+            let display = if import_info.alias != resolved {
+                format!("{} ({})", import_info.alias, resolved)
+            } else {
+                resolved.clone()
+            };
+            (resolved, display)
+        } else {
+            // Fallback: maybe it's already a direct path (old format)
+            (file_key.clone(), file_key)
+        };
+
+        // Find the referenced document using resolved path
+        let ref_doc = ws.get_document_by_key(&resolved_path)?;
 
         // Get the value at the path
         let path_refs: Vec<&str> = key_path.iter().map(|s| s.as_str()).collect();
@@ -268,7 +301,7 @@ pub fn hover(ws: &Workspace, uri: &Url, position: Position) -> Option<Hover> {
         let preview = format_yaml_preview(value);
         let content = format!(
             "**Source:** `{}`\n\n```yaml\n{}\n```",
-            file_key, preview
+            display_name, preview
         );
 
         return Some(Hover {

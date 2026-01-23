@@ -7,9 +7,9 @@ use futures::future;
 use crate::{
     DagFiles, Konf, Value,
     fs::FileProvider,
+    imports::parse_imports,
     loader::{LoaderError, MultiLoader},
     render_helper::resolve_refs_from_deps,
-    utils::get_conf_strings,
 };
 
 /// Error type for configuration rendering failures.
@@ -78,7 +78,7 @@ impl<P: FileProvider> Dag<P> {
         let konf = files_snapshot
             .get(file_path)
             .ok_or_else(|| anyhow!("File not found: {}", file_path))?;
-        const IMPORT_KEY: &str = "import";
+
         // This `get_or_try_init` takes a Future, and the whole expression is await-able.
         // This now correctly matches what the compiler expects.
         let rendered_value = konf
@@ -86,12 +86,28 @@ impl<P: FileProvider> Dag<P> {
             .get_or_try_init(async {
                 // The async block is now valid
                 let raw_value = konf.raw.clone();
-                let imports = get_conf_strings(&raw_value, IMPORT_KEY);
 
-                let dep_futures = imports.iter().map(|key| self.get_rendered(key));
+                // Parse imports using the new format-aware parser
+                // file_path is used to resolve relative paths (../, ./)
+                let import_infos = parse_imports(&raw_value, file_path);
 
+                // Collect resolved paths for loading dependencies
+                let resolved_paths: Vec<String> = import_infos
+                    .values()
+                    .map(|info| info.resolved_path.clone())
+                    .collect();
+
+                // Load all dependencies by their resolved paths
+                let dep_futures = resolved_paths.iter().map(|path| self.get_rendered(path));
                 let dep_results = future::try_join_all(dep_futures).await?;
-                let deps_map = imports.into_iter().zip(dep_results).collect();
+
+                // Build deps_map using aliases as keys (for template resolution)
+                // This allows ${alias.key} to work in templates
+                let deps_map: HashMap<String, Value> = import_infos
+                    .values()
+                    .map(|info| info.alias.clone())
+                    .zip(dep_results)
+                    .collect();
 
                 let mut value_to_render = raw_value;
                 resolve_refs_from_deps(&mut value_to_render, &deps_map);

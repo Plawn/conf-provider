@@ -19,6 +19,7 @@ pub mod config;
 pub mod metrics;
 pub mod telemetry;
 pub mod functions;
+pub mod imports;
 /// A configuration entry that holds both raw and rendered versions.
 ///
 /// The `raw` field contains the original parsed configuration, while

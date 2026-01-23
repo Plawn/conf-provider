@@ -1,7 +1,7 @@
 <!>:
   import:
-    - common/database
-    - common/redis
+    common/database:
+    common/redis:
 
 service:
   name: worker-service

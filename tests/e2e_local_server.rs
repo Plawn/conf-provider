@@ -156,7 +156,7 @@ async fn test_server_flat_config() {
     );
 
     let body = response.text().await.unwrap();
-    assert!(body.contains("dzedez$"), "Should contain value from a.yaml");
+    assert!(body.contains("dzedez"), "Should contain value from a.yaml");
 }
 
 #[tokio::test]

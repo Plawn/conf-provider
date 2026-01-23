@@ -92,6 +92,21 @@ impl KonfDocument {
             .map(extract_top_level_keys)
             .unwrap_or_default();
 
+        tracing::debug!(
+            "Parsed document '{}': {} imports, {} template refs",
+            key,
+            metadata.imports.len(),
+            template_refs.len()
+        );
+        for (alias, info) in &metadata.imports {
+            tracing::debug!(
+                "  Import: alias='{}', path='{}', resolved='{:?}'",
+                alias,
+                info.path,
+                info.resolved_path
+            );
+        }
+
         Self {
             key,
             content,
@@ -161,6 +176,51 @@ impl KonfDocument {
 
         Some(current)
     }
+
+    /// Find the line and column where a key path is defined
+    /// Returns (line, column) where line is 0-indexed
+    pub fn find_key_position(&self, path: &[&str]) -> Option<(u32, u32)> {
+        if path.is_empty() {
+            return Some((0, 0));
+        }
+
+        let lines: Vec<&str> = self.content.lines().collect();
+        let mut current_indent = 0i32;
+        let mut path_index = 0;
+
+        for (line_idx, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+
+            // Calculate indentation (spaces)
+            let indent = line.len() - trimmed.len();
+
+            // Check if this line defines the key we're looking for
+            let target_key = path[path_index];
+            let key_pattern = format!("{}:", target_key);
+
+            if trimmed.starts_with(&key_pattern) {
+                // Check if indentation matches expected level
+                let expected_indent = if path_index == 0 { 0 } else { current_indent + 2 };
+
+                if (indent as i32) >= expected_indent - 1 && (indent as i32) <= expected_indent + 1 {
+                    path_index += 1;
+                    current_indent = indent as i32;
+
+                    if path_index == path.len() {
+                        // Found the final key
+                        let col = line.find(&key_pattern).unwrap_or(0);
+                        return Some((line_idx as u32, col as u32));
+                    }
+                }
+            }
+        }
+
+        // If we found some of the path but not all, return the last found position
+        None
+    }
 }
 
 /// Information about a key in the config
@@ -188,43 +248,28 @@ fn extract_metadata(yaml: &YamlValue, doc_key: &str) -> KonfMetadata {
 
     let mut imports = HashMap::new();
 
-    // Parse imports - can be a mapping (path: alias) or a sequence of strings
+    // Parse imports - mapping of path -> alias
+    // If alias is null or empty, the path is used as the alias
     if let Some(import_value) = meta_map.get(YamlValue::String("import".to_string())) {
-        match import_value {
-            // New format: mapping of path -> alias
-            YamlValue::Mapping(map) => {
-                for (path_val, alias_val) in map {
-                    if let (Some(path), Some(alias)) = (path_val.as_str(), alias_val.as_str()) {
-                        let resolved = resolve_relative_path(doc_key, path);
-                        imports.insert(
-                            alias.to_string(),
-                            ImportInfo {
-                                path: path.to_string(),
-                                alias: alias.to_string(),
-                                resolved_path: Some(resolved),
-                            },
-                        );
-                    }
+        if let YamlValue::Mapping(map) = import_value {
+            for (path_val, alias_val) in map {
+                if let Some(path) = path_val.as_str() {
+                    // If alias is a non-empty string, use it; otherwise use the path as alias
+                    let alias = match alias_val.as_str() {
+                        Some(s) if !s.is_empty() => s.to_string(),
+                        _ => path.to_string(), // Null, empty string, or other → use path as alias
+                    };
+                    let resolved = resolve_relative_path(doc_key, path);
+                    imports.insert(
+                        alias.clone(),
+                        ImportInfo {
+                            path: path.to_string(),
+                            alias,
+                            resolved_path: Some(resolved),
+                        },
+                    );
                 }
             }
-            // Old format: sequence of strings (path is also the alias)
-            YamlValue::Sequence(seq) => {
-                for v in seq {
-                    if let Some(path) = v.as_str() {
-                        let resolved = resolve_relative_path(doc_key, path);
-                        // Use the path as the alias for backwards compatibility
-                        imports.insert(
-                            path.to_string(),
-                            ImportInfo {
-                                path: path.to_string(),
-                                alias: path.to_string(),
-                                resolved_path: Some(resolved),
-                            },
-                        );
-                    }
-                }
-            }
-            _ => {}
         }
     }
 
@@ -485,8 +530,8 @@ mod tests {
     fn test_is_in_import_section() {
         let content = r#"<!>:
   import:
-    - common/database
-    - common/redis
+    common/database:
+    common/redis: cache
 
 service:
   name: test
@@ -495,5 +540,44 @@ service:
         assert!(is_in_import_section(content, 3));
         assert!(!is_in_import_section(content, 5));
         assert!(!is_in_import_section(content, 6));
+    }
+
+    #[test]
+    fn test_find_key_position() {
+        let content = r#"host: localhost
+port: 5432
+database:
+  name: mydb
+  user: admin
+  nested:
+    deep: value
+"#;
+        let doc = KonfDocument::parse("test".to_string(), content.to_string());
+
+        // Top-level key
+        let pos = doc.find_key_position(&["host"]);
+        assert_eq!(pos, Some((0, 0)));
+
+        let pos = doc.find_key_position(&["port"]);
+        assert_eq!(pos, Some((1, 0)));
+
+        // Nested key
+        let pos = doc.find_key_position(&["database", "name"]);
+        assert_eq!(pos, Some((3, 2)));
+
+        let pos = doc.find_key_position(&["database", "user"]);
+        assert_eq!(pos, Some((4, 2)));
+
+        // Deep nested key
+        let pos = doc.find_key_position(&["database", "nested", "deep"]);
+        assert_eq!(pos, Some((6, 4)));
+
+        // Non-existent key
+        let pos = doc.find_key_position(&["nonexistent"]);
+        assert_eq!(pos, None);
+
+        // Empty path returns (0, 0)
+        let pos = doc.find_key_position(&[]);
+        assert_eq!(pos, Some((0, 0)));
     }
 }

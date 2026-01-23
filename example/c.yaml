@@ -1,6 +1,7 @@
-import:
-  - a
-  - b
+<!>:
+  import:
+    a:
+    b:
 
 value:
   l: ${a.value}
