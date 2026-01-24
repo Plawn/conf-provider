@@ -67,14 +67,14 @@ jobs:
           CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
           AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
         run: |
-          cargo +nightly build --release --target ${{ matrix.target }} --bin server
-          cargo +nightly build --release --target ${{ matrix.target }} --bin render
+          cargo build --release --target ${{ matrix.target }} --bin server
+          cargo build --release --target ${{ matrix.target }} --bin konf
 
       - name: Package (Unix)
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/server dist/konf-server
-          cp target/${{ matrix.target }}/release/render dist/konf-render
+          cp target/${{ matrix.target }}/release/konf dist/konf
           cd dist
           tar -czvf ../konf-provider-${{ matrix.target }}.${{ matrix.archive }} *
 
